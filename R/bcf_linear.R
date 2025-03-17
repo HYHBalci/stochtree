@@ -171,7 +171,7 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
   tau_beta <- rep(1, p_mod)  # Prior scales for beta
   
   # Interaction term initialization
-  p_int <- (p_mod * (p_mod + 1)) / 2  # Number of interaction terms
+  p_int <- (p_mod * (p_mod - 1)) / 2  # Number of interaction terms
   beta_int <- rep(0, p_int)  # Interaction effect coefficients
   tau_int <- 0.5  # Prior scale for interactions
   
@@ -179,13 +179,13 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
   sigma <- 1  
   sigma2_samples <- numeric(num_mcmc)
   
-  # Store all MCMC samples
-  alpha_samples <- numeric(num_mcmc)
-  beta_samples <- matrix(0, nrow = num_mcmc, ncol = p_mod)
-  tau_beta_samples <- matrix(0, nrow = num_mcmc, ncol = p_mod)
-  beta_int_samples <- matrix(0, nrow = num_mcmc, ncol = p_int)
-  tau_int_samples <- numeric(num_mcmc)
-
+  # Store all MCMC samples, also accross different chains. 
+  num_chains <- general_params_updated$num_chains
+  alpha_samples <- matrix(0, nrow = num_chains, ncol = num_mcmc)
+  beta_samples <- array(0, dim = c(num_chains, num_mcmc, p_mod))
+  tau_beta_samples <- array(0, dim = c(num_chains, num_mcmc, p_mod))
+  beta_int_samples <- array(0, dim = c(num_chains, num_mcmc, p_int))
+  tau_int_samples <- matrix(0, nrow = num_chains, ncol = num_mcmc)
 
   #########
   # Update mu forest BCF parameters
@@ -1019,6 +1019,14 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
   # Run MCMC
   if (num_burnin + num_mcmc > 0) {
     for (chain_num in 1:num_chains) {
+      ### Initialize New Initial Parameters to be sampled.
+      linear_counter <- 0 
+      # alpha <- 0 
+      # beta <- rep(0, p_mod) 
+      # tau_beta <- rep(1, p_mod)
+      # beta_int <- rep(0, p_int) 
+      # tau_int <- 0.5
+      # 
       if (num_gfr > 0) {
         # Reset state of active_forest and forest_model based on a previous GFR sample
         forest_ind <- num_gfr - chain_num
@@ -1187,9 +1195,6 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
         if (sample_sigma_global) {
           current_sigma2 <- sampleGlobalErrorVarianceOneIteration(outcome_train, forest_dataset_train, rng, a_global, b_global)
           global_model_config$update_global_error_variance(current_sigma2)
-          print('current sigma: ')
-          print(current_sigma2)
-      
         }
         if (sample_sigma_leaf_mu) {
           leaf_scale_mu_double <- sampleLeafVarianceOneIteration(active_forest_mu, rng, a_leaf_mu, b_leaf_mu)
@@ -1234,11 +1239,12 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
         outcome_train$update_data(residual)
         
         if(keep_sample){
-          alpha_samples[sample_counter-base_num] <- alpha
-          beta_samples[sample_counter-base_num, ] <- beta
-          tau_beta_samples[sample_counter-base_num, ] <- tau_beta
-          beta_int_samples[sample_counter-base_num, ] <- beta_int
-          tau_int_samples[sample_counter-base_num] <- tau_int
+          linear_counter <- linear_counter + 1
+          alpha_samples[chain_num, linear_counter] <- alpha
+          beta_samples[chain_num, linear_counter, ] <- beta
+          tau_beta_samples[chain_num, linear_counter, ] <- tau_beta
+          beta_int_samples[chain_num, linear_counter, ] <- beta_int
+          tau_int_samples[chain_num, linear_counter] <- tau_int
         }
         # Sample coding parameters (if requested)
         if (adaptive_coding) {

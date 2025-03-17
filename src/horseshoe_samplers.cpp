@@ -129,7 +129,7 @@ double sample_tau_j_slice(
   std::vector<std::pair<int,int>> int_pairs_trt;
   int_pairs_trt.reserve(p_int);
   for(int ii = 0; ii < p_mod; ii++){
-    for(int jj = ii; jj < p_mod; jj++){
+    for(int jj = ii + 1; jj < p_mod; jj++){
       int_pairs_trt.push_back(std::make_pair(ii, jj));
     } 
   } 
@@ -323,13 +323,13 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
   int n = residual.size();
   int p_mod = X.ncol();
   // number of interaction pairs = p_mod*(p_mod+1)/2
-  int p_int = (p_mod * (p_mod + 1)) / 2;
+  int p_int = (p_mod * (p_mod - 1)) / 2;
    
   // Build the interaction-pair index list
   std::vector<std::pair<int,int>> int_pairs;
   int_pairs.reserve(p_int);
   for(int i = 0; i < p_mod; i++){
-    for(int j = i; j < p_mod; j++){
+    for(int j = i + 1; j < p_mod; j++){
       int_pairs.push_back(std::make_pair(i, j));
     }
   } 
