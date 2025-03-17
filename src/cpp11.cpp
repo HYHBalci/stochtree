@@ -1013,6 +1013,34 @@ extern "C" SEXP _stochtree_root_reset_active_forest_cpp(SEXP active_forest) {
     return R_NilValue;
   END_CPP11
 }
+// horseshoe_samplers.cpp
+double sample_beta_j_cpp(int N, writable::doubles r_beta, writable::doubles z, writable::doubles w_j, double tau_j, double sigma);
+extern "C" SEXP _stochtree_sample_beta_j_cpp(SEXP N, SEXP r_beta, SEXP z, SEXP w_j, SEXP tau_j, SEXP sigma) {
+  BEGIN_CPP11
+    return cpp11::as_sexp(sample_beta_j_cpp(cpp11::as_cpp<cpp11::decay_t<int>>(N), cpp11::as_cpp<cpp11::decay_t<writable::doubles>>(r_beta), cpp11::as_cpp<cpp11::decay_t<writable::doubles>>(z), cpp11::as_cpp<cpp11::decay_t<writable::doubles>>(w_j), cpp11::as_cpp<cpp11::decay_t<double>>(tau_j), cpp11::as_cpp<cpp11::decay_t<double>>(sigma)));
+  END_CPP11
+}
+// horseshoe_samplers.cpp
+double sample_tau_j_slice(double tau_old, double beta_j, int index, const std::vector<double> & beta_int, const std::vector<double> & tau, double tau_int, double sigma, bool interaction, double step_out, int max_steps);
+extern "C" SEXP _stochtree_sample_tau_j_slice(SEXP tau_old, SEXP beta_j, SEXP index, SEXP beta_int, SEXP tau, SEXP tau_int, SEXP sigma, SEXP interaction, SEXP step_out, SEXP max_steps) {
+  BEGIN_CPP11
+    return cpp11::as_sexp(sample_tau_j_slice(cpp11::as_cpp<cpp11::decay_t<double>>(tau_old), cpp11::as_cpp<cpp11::decay_t<double>>(beta_j), cpp11::as_cpp<cpp11::decay_t<int>>(index), cpp11::as_cpp<cpp11::decay_t<const std::vector<double> &>>(beta_int), cpp11::as_cpp<cpp11::decay_t<const std::vector<double> &>>(tau), cpp11::as_cpp<cpp11::decay_t<double>>(tau_int), cpp11::as_cpp<cpp11::decay_t<double>>(sigma), cpp11::as_cpp<cpp11::decay_t<bool>>(interaction), cpp11::as_cpp<cpp11::decay_t<double>>(step_out), cpp11::as_cpp<cpp11::decay_t<int>>(max_steps)));
+  END_CPP11
+}
+// horseshoe_samplers.cpp
+double sample_alpha_cpp(int N, writable::doubles r_alpha, writable::doubles z_, double sigma, double alpha_prior_sd);
+extern "C" SEXP _stochtree_sample_alpha_cpp(SEXP N, SEXP r_alpha, SEXP z_, SEXP sigma, SEXP alpha_prior_sd) {
+  BEGIN_CPP11
+    return cpp11::as_sexp(sample_alpha_cpp(cpp11::as_cpp<cpp11::decay_t<int>>(N), cpp11::as_cpp<cpp11::decay_t<writable::doubles>>(r_alpha), cpp11::as_cpp<cpp11::decay_t<writable::doubles>>(z_), cpp11::as_cpp<cpp11::decay_t<double>>(sigma), cpp11::as_cpp<cpp11::decay_t<double>>(alpha_prior_sd)));
+  END_CPP11
+}
+// horseshoe_samplers.cpp
+cpp11::writable::doubles updateLinearTreatmentCpp_cpp(cpp11::doubles_matrix<> X, cpp11::doubles Z, cpp11::writable::doubles residual, double alpha, cpp11::writable::doubles beta, cpp11::writable::doubles beta_int, cpp11::writable::doubles tau_beta, double tau_int, double sigma, double alpha_prior_sd);
+extern "C" SEXP _stochtree_updateLinearTreatmentCpp_cpp(SEXP X, SEXP Z, SEXP residual, SEXP alpha, SEXP beta, SEXP beta_int, SEXP tau_beta, SEXP tau_int, SEXP sigma, SEXP alpha_prior_sd) {
+  BEGIN_CPP11
+    return cpp11::as_sexp(updateLinearTreatmentCpp_cpp(cpp11::as_cpp<cpp11::decay_t<cpp11::doubles_matrix<>>>(X), cpp11::as_cpp<cpp11::decay_t<cpp11::doubles>>(Z), cpp11::as_cpp<cpp11::decay_t<cpp11::writable::doubles>>(residual), cpp11::as_cpp<cpp11::decay_t<double>>(alpha), cpp11::as_cpp<cpp11::decay_t<cpp11::writable::doubles>>(beta), cpp11::as_cpp<cpp11::decay_t<cpp11::writable::doubles>>(beta_int), cpp11::as_cpp<cpp11::decay_t<cpp11::writable::doubles>>(tau_beta), cpp11::as_cpp<cpp11::decay_t<double>>(tau_int), cpp11::as_cpp<cpp11::decay_t<double>>(sigma), cpp11::as_cpp<cpp11::decay_t<double>>(alpha_prior_sd)));
+  END_CPP11
+}
 // kernel.cpp
 int forest_container_get_max_leaf_index_cpp(cpp11::external_pointer<StochTree::ForestContainer> forest_container, int forest_num);
 extern "C" SEXP _stochtree_forest_container_get_max_leaf_index_cpp(SEXP forest_container, SEXP forest_num) {
@@ -1583,9 +1611,12 @@ static const R_CallMethodDef CallEntries[] = {
     {"_stochtree_rng_cpp",                                             (DL_FUNC) &_stochtree_rng_cpp,                                              1},
     {"_stochtree_root_reset_active_forest_cpp",                        (DL_FUNC) &_stochtree_root_reset_active_forest_cpp,                         1},
     {"_stochtree_root_reset_rfx_tracker_cpp",                          (DL_FUNC) &_stochtree_root_reset_rfx_tracker_cpp,                           4},
+    {"_stochtree_sample_alpha_cpp",                                    (DL_FUNC) &_stochtree_sample_alpha_cpp,                                     5},
+    {"_stochtree_sample_beta_j_cpp",                                   (DL_FUNC) &_stochtree_sample_beta_j_cpp,                                    6},
     {"_stochtree_sample_gfr_one_iteration_cpp",                        (DL_FUNC) &_stochtree_sample_gfr_one_iteration_cpp,                        16},
     {"_stochtree_sample_mcmc_one_iteration_cpp",                       (DL_FUNC) &_stochtree_sample_mcmc_one_iteration_cpp,                       16},
     {"_stochtree_sample_sigma2_one_iteration_cpp",                     (DL_FUNC) &_stochtree_sample_sigma2_one_iteration_cpp,                      5},
+    {"_stochtree_sample_tau_j_slice",                                  (DL_FUNC) &_stochtree_sample_tau_j_slice,                                  10},
     {"_stochtree_sample_tau_one_iteration_cpp",                        (DL_FUNC) &_stochtree_sample_tau_one_iteration_cpp,                         4},
     {"_stochtree_set_leaf_value_active_forest_cpp",                    (DL_FUNC) &_stochtree_set_leaf_value_active_forest_cpp,                     2},
     {"_stochtree_set_leaf_value_forest_container_cpp",                 (DL_FUNC) &_stochtree_set_leaf_value_forest_container_cpp,                  2},
@@ -1597,6 +1628,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_stochtree_subtract_from_column_vector_cpp",                     (DL_FUNC) &_stochtree_subtract_from_column_vector_cpp,                      2},
     {"_stochtree_sum_leaves_squared_ensemble_forest_container_cpp",    (DL_FUNC) &_stochtree_sum_leaves_squared_ensemble_forest_container_cpp,     2},
     {"_stochtree_tree_prior_cpp",                                      (DL_FUNC) &_stochtree_tree_prior_cpp,                                       4},
+    {"_stochtree_updateLinearTreatmentCpp_cpp",                        (DL_FUNC) &_stochtree_updateLinearTreatmentCpp_cpp,                        10},
     {"_stochtree_update_alpha_tree_prior_cpp",                         (DL_FUNC) &_stochtree_update_alpha_tree_prior_cpp,                          2},
     {"_stochtree_update_beta_tree_prior_cpp",                          (DL_FUNC) &_stochtree_update_beta_tree_prior_cpp,                           2},
     {"_stochtree_update_max_depth_tree_prior_cpp",                     (DL_FUNC) &_stochtree_update_max_depth_tree_prior_cpp,                      2},

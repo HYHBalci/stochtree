@@ -1,269 +1,501 @@
-#include <Rcpp.h>
-#include <cmath>          // for std::log, std::sqrt, etc.
-#include <limits>         // for std::numeric_limits<double>::infinity()
+#include <cpp11.hpp>             // main cpp11 header
+#include <cpp11/doubles.hpp>     // for doubles, writable::doubles
+#include <cpp11/list.hpp>        // for writable::list
+#include <cmath>                 // for std::log, std::sqrt
+#include <limits>                // for std::numeric_limits<double>::infinity
+#include <algorithm>             // for std::max
+#include <vector>
+#include <fstream>
+#include <iostream> 
+// For runif, rnorm, rgamma; these are part of R's C API.
+// If you'd prefer a different RNG, replace these calls accordingly.
+#include <Rmath.h> // ensures R::rnorm, R::runif, R::rgamma work
 
-// We need M_PI for pi. If not defined on your system, define it manually:
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
 
-using namespace Rcpp;
+// Use the cpp11 namespace
+using namespace cpp11;
 
-/*
- -------------------------------------------------------------------
- (1) sample_beta_j
- 
- Given:
- - N:         number of data points
- - r_beta:    partial residual vector of length N
- r_beta[i] = y[i] - m_baseline[i] - Σ_{k≠j} [ z[i]*w_{i,k}*β_k ]
- - z:         treatment indicators, 0 or 1, length N
- - w_j:       the j-th column of the moderator design (length N)
- - tau_j:     local scale for β_j
- - sigma:     residual SD
- Returns:
- - A *new sample* for β_j from its conditional Normal posterior:
- β_j | (rest) ~ Normal(postMean, postVar)
- */
-
-// [[Rcpp::export]]
-double sample_beta_j(
+// --------------------------------------------
+// 1) sample_beta_j
+[[cpp11::register]]
+double sample_beta_j_cpp(
     int N,
-    NumericVector r_beta,
-    NumericVector z,
-    NumericVector w_j,
+    writable::doubles r_beta,
+    writable::doubles z,
+    writable::doubles w_j,
     double tau_j,
     double sigma
 ) {
-  double sum_XZ2 = 0.0;  // sum of (z[i]*w_j[i])^2
-  double sum_XZr = 0.0;  // sum of (z[i]*w_j[i]) * r_beta[i]
+  double sum_XZ2 = 0.0;
+  double sum_XZr = 0.0;
   
   for(int i = 0; i < N; i++){
     double xz = z[i] * w_j[i];
     sum_XZ2 += xz * xz;
     sum_XZr += xz * r_beta[i];
   }
-  
-  // prior variance for β_j is sigma^2 * tau_j^2
+   
   double priorVar  = (sigma * sigma) * (tau_j * tau_j);
-  // data precision from likelihood
   double prec_data  = sum_XZ2 / (sigma * sigma);
-  // prior precision
   double prec_prior = 1.0 / priorVar;
   
   double postVar  = 1.0 / (prec_data + prec_prior);
   double postMean = postVar * (sum_XZr / (sigma * sigma));
   
-  // Draw from Normal(postMean, sqrt(postVar)) using R::rnorm
-  double draw = R::rnorm(postMean, std::sqrt(postVar));
+  // draw from Normal(postMean, sqrt(postVar)) using R's RNG
+  double draw = ::Rf_rnorm(postMean, std::sqrt(postVar));
   return draw;
-  }
+}
 
-/*
- -------------------------------------------------------------------
- (2) sample_tau_j_slice 
- 
- Uses a slice sampler to update tau_j > 0 from the posterior:
- p(tau_j | beta_j, sigma) ∝  [Half-Cauchy(0,1) on tau_j]
- × N(beta_j | 0, sigma^2 * tau_j^2)
- 
- We define an internal function log_p_tau(...) to compute log posterior.
- */
-
-
-static double log_p_tau(double tau, double beta_j, double sigma)
-{ 
-  // Half-Cauchy(0,1): p(tau) = 2/pi * 1/(1 + tau^2), tau>0
-  // => log p(tau) = log(2/pi) - log(1 + tau^2)
-  // Normal(0, sigma^2 * tau^2): p(beta_j|tau)
-  // => log p(beta_j|tau) = -0.5 * [ log(2π) + log(sigma^2 τ^2) + (beta_j^2 / (sigma^2 τ^2)) ]
-   
-  if(tau <= 0.0) {
+// --------------------------------------------
+// 2) sample_tau_j_slice
+double logPosteriorTauJ(
+    double tau_j,                // Proposed tau_j > 0
+    double beta_j, //proposal for beta_{j}
+    int index,  // index of {j}
+    const std::vector<double> & beta_int, // Interaction terms: beta_{j,k} for all k in 'otherIdx'
+    const std::vector<double> & tau, // The vector of all tau
+    double tau_int,   
+    double sigma,
+    const std::vector<std::pair<int,int>> &int_pairs_trt = std::vector<std::pair<int,int>>(), //vector initializing the pairs made {j,k}
+    bool interaction = false
+) {
+  // 1) check positivity
+  if (tau_j <= 0.0) {
     return -std::numeric_limits<double>::infinity();
-  } 
+  }  
   
-  double log_prior = std::log(2.0 / M_PI) - std::log(1.0 + tau * tau);
-   
-  // log-likelihood of beta_j
-  double log_lik = -0.5 * (
-    std::log(2.0 * M_PI)
-    + 2.0 * std::log(sigma)
-    + 2.0 * std::log(tau)
-    + (beta_j * beta_j) / ( (sigma * sigma) * (tau * tau) )
-  ); 
-  log_lik = -0.5 * (
-    std::log(2.0 * M_PI)
-    + 2.0 * std::log(sigma)
-    + 2.0 * std::log(tau)
-    + ( (beta_j * beta_j) / ( (sigma * sigma) * (tau * tau) ) )
-  );
-   
-  return log_prior + log_lik;
-} 
-
-// [[Rcpp::export]]
+  // 2) half-Cauchy(0,1) log prior: log(2/pi) - log(1 + tau_j^2)
+  double logPrior = std::log(2.0 / M_PI) - std::log(1.0 + tau_j * tau_j);
+  
+  // 3) main effect log-likelihood: Normal(0, sigma^2 * tau_j^2)
+  double log2pi  = std::log(2.0 * M_PI);
+  double var_main= (sigma * sigma) * (tau_j * tau_j);
+  double logLikMain = -0.5 * ( log2pi + std::log(var_main) ) 
+    - 0.5 * ( (beta_j * beta_j) / var_main ); 
+  
+  // 4) interaction log-likelihood
+  //    For each k in otherIdx, beta_{j,k} ~ Normal(0, sigma^2 * tau_j * tau_k * tau_int)
+  double logLikInter = 0.0;
+  if(interaction){
+    for (size_t m=0; m < int_pairs_trt.size(); m++) {
+      int iVar = int_pairs_trt[m].first;
+      int jVar = int_pairs_trt[m].second;
+      int target_idx = -1848; // index to fetch the other tau[]
+      bool sample_flag = false;
+      if (iVar == index){
+        target_idx = jVar;
+        sample_flag = true;
+      } else if (jVar == index){ 
+        target_idx =iVar;
+        sample_flag = true;
+      }
+      if(sample_flag){
+        double beta_jk = beta_int[m];
+        double var_jk;
+        if(target_idx == index){
+          var_jk  = (sigma * sigma) * tau_j * tau_j * tau_int;
+        } else {
+          var_jk  = (sigma * sigma) * tau_j * tau[target_idx] * tau_int;
+        }
+        double b2      = beta_jk * beta_jk;
+        
+        double ll = -0.5 * (log2pi + std::log(var_jk)) 
+          -0.5 * (b2 / var_jk); 
+        logLikInter += ll;
+      }}}   
+  
+  return logPrior + logLikMain + logLikInter;
+}   
+[[cpp11::register]]
 double sample_tau_j_slice(
     double tau_old,
-    double beta_j,
+    double beta_j,            // main effect beta_j
+    int index,                // index of {j}!
+    const std::vector<double> & beta_int,  // all interaction betas
+    const std::vector<double> & tau,       // all tau
+    double tau_int,
     double sigma,
+    bool interaction = true,  // or default false
     double step_out = 0.5,
-    int max_steps   = 50
-) {
-  // 1) Evaluate log posterior at old tau
-  double logP_old = log_p_tau(tau_old, beta_j, sigma);
-  // 2) Draw a vertical level
-  double u = R::runif(0.0, 1.0);
-  double y_slice = logP_old + std::log(u);
+    int max_steps = 50
+)
+{  
+  int p_int = beta_int.size();
+  int p_mod = tau.size();
+  std::vector<std::pair<int,int>> int_pairs_trt;
+  int_pairs_trt.reserve(p_int);
+  for(int ii = 0; ii < p_mod; ii++){
+    for(int jj = ii; jj < p_mod; jj++){
+      int_pairs_trt.push_back(std::make_pair(ii, jj));
+    } 
+  } 
   
+  // 1) Evaluate log posterior at old tau
+  double logP_old = logPosteriorTauJ(
+    tau_old,
+    beta_j,
+    index,
+    beta_int,
+    tau,
+    tau_int,
+    sigma,
+    int_pairs_trt,
+    interaction
+  );   
+  
+  // 2) Draw a vertical level using Rf_runif
+  double u = Rf_runif(0.0, 1.0);
+  double y_slice = logP_old + std::log(u);
+   
   // 3) Create an interval [L, R] containing tau_old
   double L = std::max(1e-12, tau_old - step_out);
   double R = tau_old + step_out;
    
-  // Step out to the left (Prevent Infinite Loop)
+  // Step out left
   int step_count = 0;
-  while( (L > 1e-12) && (log_p_tau(L, beta_j, sigma) > y_slice) && step_count < max_steps) {
+  while ((L > 1e-12)
+           && (logPosteriorTauJ(L, beta_j, index, beta_int, tau, tau_int, sigma, int_pairs_trt, interaction) > y_slice)
+           && (step_count < max_steps)) 
+  {   
     L = std::max(1e-12, L - step_out);
     step_count++;
   }
-  
-  // Step out to the right (Prevent Infinite Loop)
+   
+  // Step out right
   step_count = 0;
-  while( log_p_tau(R, beta_j, sigma) > y_slice && step_count < max_steps) {
+  while ((logPosteriorTauJ(R, beta_j, index, beta_int, tau, tau_int, sigma, int_pairs_trt, interaction) > y_slice)
+           && (step_count < max_steps)) 
+  {  
     R += step_out;
     step_count++;
-  }
-   
-  // 4) Shrink the bracket until we find a sample
-  for(int rep = 0; rep < max_steps; rep++) {
-    double prop = std::max(1e-8, R::runif(L, R)); // Prevent log underflow
-    double lp   = log_p_tau(prop, beta_j, sigma);
-     
-    if(lp > y_slice) {
+  } 
+  
+  // 4) Shrink bracket until we find a valid sample
+  for (int rep = 0; rep < max_steps; rep++) {
+    double prop = std::max(1e-8, Rf_runif(L, R)); // use Rf_runif for uniform sampling
+    double lp   = logPosteriorTauJ(
+      prop,
+      beta_j,
+      index,
+      beta_int,
+      tau,
+      tau_int,
+      sigma,
+      int_pairs_trt,
+      interaction
+    );   
+    
+    if (lp > y_slice) {
       // Accept
       return prop;
-    } else {  
+    } else {   
       // Shrink bracket
-      if(prop < tau_old) {
-        L = prop;
-      } else { 
+      if (prop < tau_old) {
+        L = prop; 
+      } else {  
         R = prop;
       }
-    }
+    }  
   } 
-
+  
   // If we never find a point in 'max_steps' tries, return a slightly perturbed tau_old
-  return tau_old * (1.0 + 0.01 * R::runif(-1.0, 1.0));
+  return tau_old * (1.0 + 0.01 * Rf_runif(-1.0, 1.0)); // use Rf_runif
 } 
 
-// [[Rcpp::export]]
-double sample_alpha(
+// --------------------------------------------
+// 3) sample_alpha
+[[cpp11::register]]
+double sample_alpha_cpp(
     int N,
-    NumericVector r_alpha, // partial residual
-    NumericVector z_,      // treatment indicator
+    writable::doubles r_alpha,
+    writable::doubles z_,
     double sigma,
     double alpha_prior_sd = 10.0
 ) {
-  // prior alpha ~ N(0, alpha_prior_sd^2)
   double prior_var   = alpha_prior_sd * alpha_prior_sd;
   double prec_prior  = 1.0 / prior_var;
   
-  // gather sum of z_i and sum of z_i * r_alpha[i]
   double sum_z = 0.0;
   double sum_rz = 0.0;
   for(int i = 0; i < N; i++){
     sum_z  += z_[i];
     sum_rz += z_[i] * r_alpha[i];
-  }
-   
-  // data precision = sum(z_i^2) / sigma^2 = (# treated) / sigma^2 if z is 0/1
+  } 
+  
   double prec_data = sum_z / (sigma * sigma);
   double prec_post = prec_data + prec_prior;
   double var_post  = 1.0 / prec_post;
-  // posterior mean
-  double mean_post = var_post * ( sum_rz / (sigma * sigma) );
-  // draw from Normal(mean_post, sqrt(var_post))
-  double alpha_draw = R::rnorm(mean_post, std::sqrt(var_post));
+  double mean_post = var_post * (sum_rz / (sigma * sigma));
+   
+  double alpha_draw = ::Rf_rnorm(mean_post, std::sqrt(var_post));
   return alpha_draw;
 } 
 
-// [[Rcpp::export]]
-double sample_sigma2_ig(
+// --------------------------------------------
+// 4) sample_sigma2_ig
+// [[cpp11::register]]
+double sample_sigma2_ig_cpp(
     int N,
-    NumericVector resid,   // vector of residuals e_i
-    double shape_prior = 1.0, 
+    writable::doubles resid,
+    double shape_prior = 1.0,
     double rate_prior  = 0.001
 ) {
-  if (N == 0) return NA_REAL;  
+  if(N == 0) return NA_REAL;
+   
+  double rss = 0.0;
+  for(int i = 0; i < N; i++){
+    rss += resid[i] * resid[i];
+  }
   
-  // Compute residual sum of squares using vectorized Rcpp
-  double rss = sum(resid * resid);
-  
-  // Compute posterior parameters
   double shape_post = shape_prior + 0.5 * N;
   double rate_post  = rate_prior + 0.5 * rss;
   
-  double gamma_draw = R::rgamma(shape_post, 1.0 / rate_post);
-  
-  // Return inverse of gamma draw (Inverse-Gamma sample)
-  return 1.0 / gamma_draw;
+  double gamma_draw = ::Rf_rgamma(shape_post, 1.0 / rate_post);
+  return 1.0 / gamma_draw; // Inverse-Gamma sample
 }
 
-// loglikeTauInt returns the PRIOR contribution (log p(beta_int | tau_int)).
-// If tau_int is outside (0.01, 1), return -∞ (invalid).
-// beta_int:   current vector of interaction coefficients
-// tau:        vector of main-effect scale parameters tau[i]
-// sigma:      current sigma (stdev of the error term)
-// int_pairs:  vector of (iVar, jVar) pairs for interactions
-
-double loglikeTauInt(
+// --------------------------------------------
+// 5) loglikeTauInt (internal function, not exported via cpp11::register)
+static double loglikeTauInt(
     double tau_int,
-    // Baseline interaction info
     const std::vector<double> &beta_int_base,
     const std::vector<std::pair<int,int>> &int_pairs_base,
-    // Main-effect shrinkage scales (tau) used in var = sigma^2 * tau_int * tau[iVar] * tau[jVar]
     const std::vector<double> &tau_main,
-    double sigma,
-    
+    double sigma, 
     bool include_treatment_int = false,
     const std::vector<double> &beta_int_trt = std::vector<double>(),
     const std::vector<double> &tau_trt = std::vector<double>(),
     const std::vector<std::pair<int,int>> &int_pairs_trt = std::vector<std::pair<int,int>>()
-)  
-{
-  // 1) Check Uniform(0.01,1.0) boundary (or whatever bounds you like)
-  if(tau_int < 0.01 || tau_int > 1.0){
+)
+{ 
+  if(tau_int < 0.01 || tau_int > 1.0) {
     return -std::numeric_limits<double>::infinity();
   } 
   
   double logp = 0.0;
   const double log2pi = std::log(2.0 * M_PI);
    
-  // 2) Baseline interaction terms
-  //    var_ij = tau_int * tau_main[iVar] * tau_main[jVar] * (sigma*sigma)
-  //    log N(0, var_ij)
+  // baseline interaction terms
   for(size_t k = 0; k < int_pairs_base.size(); k++){
     int iVar = int_pairs_base[k].first;
     int jVar = int_pairs_base[k].second;
     double var_ij = tau_int * tau_main[iVar] * tau_main[jVar] * (sigma * sigma);
-    double beta2  = beta_int_base[k]*beta_int_base[k];
-
-    // log of N(0, var_ij) = -0.5 * [ log(2π var_ij) + beta^2 / var_ij ]
-    logp += -0.5 * (log2pi + std::log(var_ij)) 
-      - 0.5 * (beta2 / var_ij);
-  } 
+    double beta2  = beta_int_base[k] * beta_int_base[k];
+    
+    logp += -0.5 * (log2pi + std::log(var_ij)) -
+      0.5 * (beta2 / var_ij);
+  }
   
-  // 3) Treatment interaction terms (if included)
-  if(include_treatment_int && !beta_int_trt.empty()) {
+  // treatment interaction terms
+  if(include_treatment_int && !beta_int_trt.empty()){
     for(size_t k = 0; k < int_pairs_trt.size(); k++){
       int iVar = int_pairs_trt[k].first;
       int jVar = int_pairs_trt[k].second;
-
       double var_ij = tau_int * tau_main[iVar] * tau_main[jVar] * (sigma * sigma);
       double beta2  = beta_int_trt[k]*beta_int_trt[k];
-    
-      logp += -0.5 * (log2pi + std::log(var_ij))
-        - 0.5 * (beta2 / var_ij);
-    } 
+      logp += -0.5 * (log2pi + std::log(var_ij)) -
+        0.5 * (beta2 / var_ij);
+    }
   }
   return logp;
+}
+ 
+// --------------------------------------------
+// 6) updateLinearTreatmentCpp
+[[cpp11::register]]
+cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
+    cpp11::doubles_matrix<> X,             // design matrix for beta
+    cpp11::doubles Z,                      // treatment indicator
+    cpp11::writable::doubles residual,     // current total fit from the model
+    double alpha,                          // current alpha
+    cpp11::writable::doubles beta,         // current beta vector
+    cpp11::writable::doubles beta_int,     // interaction betas
+    cpp11::writable::doubles tau_beta,     // local scales for each beta_j
+    double tau_int,                        // scale for interactions
+    double sigma,                          // current noise sd
+    double alpha_prior_sd
+)
+{
+  int n = residual.size();
+  int p_mod = X.ncol();
+  // number of interaction pairs = p_mod*(p_mod+1)/2
+  int p_int = (p_mod * (p_mod + 1)) / 2;
+   
+  // Build the interaction-pair index list
+  std::vector<std::pair<int,int>> int_pairs;
+  int_pairs.reserve(p_int);
+  for(int i = 0; i < p_mod; i++){
+    for(int j = i; j < p_mod; j++){
+      int_pairs.push_back(std::make_pair(i, j));
+    }
+  } 
+  
+  //------------------------------------------------
+  // 1) Update alpha
+  //------------------------------------------------
+  // Add old alpha contribution back to residual
+  for(int i = 0; i < n; i++){
+    residual[i] += Z[i] * alpha;
+  } 
+  // sample_alpha_cpp(...) is assumed to exist
+  double alpha_new = sample_alpha_cpp(n, residual, Z, sigma, alpha_prior_sd);
+  
+  // Remove new alpha from residual
+  for(int i = 0; i < n; i++){
+    residual[i] -= Z[i] * alpha_new;
+  } 
+  alpha = alpha_new;
+   
+  //------------------------------------------------
+  // 2) Update each beta_j and its tau_beta[j]
+  //------------------------------------------------
+  // Make std::vector copies so we can pass them to sample_tau_j_slice
+  std::vector<double> beta_int_std(beta_int.begin(), beta_int.end());
+  std::vector<double> tau_beta_std(tau_beta.begin(), tau_beta.end());
+   
+  for(int j = 0; j < p_mod; j++){
+    // 2a) Remove old beta_j from residual
+    for(int i = 0; i < n; i++){
+      residual[i] += Z[i] * beta[j] * X(i,j);
+    }
+     
+    // Build local w_j
+    cpp11::writable::doubles w_j(n);
+    for(int i = 0; i < n; i++){
+      w_j[i] = X(i, j);
+    }
+     
+    // sample_beta_j_cpp(...) is assumed to exist
+    double beta_j_new = sample_beta_j_cpp(n, residual, Z, w_j, tau_beta[j], sigma);
+     
+    // Remove the newly updated beta_j from residual
+    for(int i = 0; i < n; i++){
+      residual[i] -= Z[i] * beta_j_new * X(i,j);
+    } 
+    beta[j] = beta_j_new;
+      
+    // 2b) Sample local scale tau_beta[j] via slice
+    double tb_j_new = sample_tau_j_slice(
+      tau_beta[j],          // old tau_j
+              beta[j],              // new beta_j 
+                  j,                    // index
+                  beta_int_std,         // entire vector of interaction betas
+                  tau_beta_std,         // entire vector of tau_beta
+                  tau_int,              // global interaction scale
+                  sigma,                // noise sd
+                  true,                 // interaction = true
+                  0.5,                  // step_out
+                  50                    // max_steps
+    );
+    tau_beta[j] = tb_j_new;
+    // update local copy so the next j sees the updated tau_j
+    tau_beta_std[j] = tb_j_new;
+  } 
+  
+  //------------------------------------------------
+  // 3) Update pairwise interaction effects
+  //------------------------------------------------
+  for(size_t k = 0; k < int_pairs.size(); k++){
+    int iVar = int_pairs[k].first;
+    int jVar = int_pairs[k].second;
+     
+    // Remove old beta_int[k] from residual
+    for(int i = 0; i < n; i++){
+      double x_ij = X(i, iVar) * X(i, jVar);
+      residual[i] += Z[i] * beta_int[k] * x_ij;
+    }
+     
+    // Build w_ij
+    cpp11::writable::doubles w_ij(n);
+    for(int i = 0; i < n; i++){
+      w_ij[i] = X(i, iVar) * X(i, jVar);
+    } 
+    
+    // scale for normal prior on beta_int[k]
+    double scale_int = std::sqrt(tau_int * tau_beta[iVar] * tau_beta[jVar]);
+     
+    // sample_beta_j_cpp(...) is assumed to exist
+    double beta_int_new = sample_beta_j_cpp(n, residual, Z, w_ij, scale_int, sigma);
+     
+    // Remove newly updated beta_int from residual
+    for(int i = 0; i < n; i++){
+      double x_ij = X(i, iVar) * X(i, jVar);
+      residual[i] -= Z[i] * beta_int_new * x_ij;
+    } 
+    beta_int[k] = beta_int_new;
+    beta_int_std[k] = beta_int_new; // keep in sync if you prefer
+  }
+   
+  //------------------------------------------------
+  // 4) Slice-sample tau_int
+  //------------------------------------------------
+  double currentTauInt   = tau_int;
+  double proposedTauInt  = ::Rf_runif(0.01, 1.0);
+   
+  // For loglikeTauInt(...)
+  std::vector<double> beta_int_std2(beta_int.begin(), beta_int.end());
+  std::vector<double> tau_beta_std2(tau_beta.begin(), tau_beta.end());
+   
+  double logPosteriorCurrent = loglikeTauInt(
+    currentTauInt,
+    beta_int_std2,
+    int_pairs,
+    tau_beta_std2,
+    sigma
+  ); 
+  double logPosteriorProposed = loglikeTauInt(
+    proposedTauInt,
+    beta_int_std2,
+    int_pairs,
+    tau_beta_std2,
+    sigma
+  ); 
+  double logAccept = logPosteriorProposed - logPosteriorCurrent;
+  
+  if(::Rf_runif(0.0, 1.0) < std::exp(logAccept)){
+    tau_int = proposedTauInt;
+  } else { 
+    tau_int = currentTauInt;
+  }
+   
+  //------------------------------------------------
+  // Prepare output
+  //------------------------------------------------
+  size_t total_size = 2 
+  + beta.size() 
+    + beta_int.size() 
+    + tau_beta.size() 
+    + residual.size(); 
+    cpp11::writable::doubles output;
+    output.reserve(total_size);
+    
+    // alpha, tau_int
+    output.push_back(alpha);
+    output.push_back(tau_int);
+    
+    // beta
+    for(double val : beta){
+      output.push_back(val);
+    }
+    
+    // beta_int
+    for(double val : beta_int){
+      output.push_back(val);
+    }
+    
+    // tau_beta
+    for(double val : tau_beta){
+      output.push_back(val);
+    }
+    
+    // residual
+    for(double val : residual){
+      output.push_back(val);
+    }
+    
+    return output;
 }

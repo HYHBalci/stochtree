@@ -548,6 +548,22 @@ root_reset_active_forest_cpp <- function(active_forest) {
   invisible(.Call(`_stochtree_root_reset_active_forest_cpp`, active_forest))
 }
 
+sample_beta_j_cpp <- function(N, r_beta, z, w_j, tau_j, sigma) {
+  .Call(`_stochtree_sample_beta_j_cpp`, N, r_beta, z, w_j, tau_j, sigma)
+}
+
+sample_tau_j_slice <- function(tau_old, beta_j, index, beta_int, tau, tau_int, sigma, interaction, step_out, max_steps) {
+  .Call(`_stochtree_sample_tau_j_slice`, tau_old, beta_j, index, beta_int, tau, tau_int, sigma, interaction, step_out, max_steps)
+}
+
+sample_alpha_cpp <- function(N, r_alpha, z_, sigma, alpha_prior_sd) {
+  .Call(`_stochtree_sample_alpha_cpp`, N, r_alpha, z_, sigma, alpha_prior_sd)
+}
+
+updateLinearTreatmentCpp_cpp <- function(X, Z, residual, alpha, beta, beta_int, tau_beta, tau_int, sigma, alpha_prior_sd) {
+  .Call(`_stochtree_updateLinearTreatmentCpp_cpp`, X, Z, residual, alpha, beta, beta_int, tau_beta, tau_int, sigma, alpha_prior_sd)
+}
+
 forest_container_get_max_leaf_index_cpp <- function(forest_container, forest_num) {
   .Call(`_stochtree_forest_container_get_max_leaf_index_cpp`, forest_container, forest_num)
 }

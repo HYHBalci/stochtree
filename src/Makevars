@@ -23,4 +23,5 @@ OBJECTS = \
     leaf_model.o \
     partition_tracker.o \
     random_effects.o \
-    tree.o
+    tree.o \
+    horseshoe_samplers.o
