@@ -11,7 +11,7 @@
 // Function declarations
 double sample_beta_j_cpp(int N, cpp11::writable::doubles r_beta,
                          cpp11::writable::doubles z, cpp11::writable::doubles w_j,
-                         double tau_j, double sigma);
+                         double tau_j, double sigma, double tau_glob = 1);
 
 double sample_tau_j_slice(
     double tau_old,
@@ -23,7 +23,8 @@ double sample_tau_j_slice(
     double sigma,
     bool interaction = true,  // or default false
     double step_out = 0.5,
-    int max_steps = 50
+    int max_steps = 50, double tau_glob = 1,  
+    bool global_shrink = false 
 );
 
 double sample_alpha_cpp(int N, cpp11::writable::doubles r_alpha,
@@ -35,6 +36,7 @@ double sample_sigma2_ig_cpp(int N, cpp11::writable::doubles resid,
 cpp11::writable::list updateLinearTreatmentCpp_cpp(
     cpp11::doubles_matrix<> X, cpp11::doubles Z, cpp11::writable::doubles residual,
     double alpha, cpp11::writable::doubles beta, cpp11::writable::doubles beta_int,
-    cpp11::writable::doubles tau_beta, double tau_int, double sigma, double alpha_prior_sd);
+    cpp11::writable::doubles tau_beta, double tau_int, double sigma, double alpha_prior_sd, double tau_glob = 1, 
+    bool global_shrink = false);
 
 #endif 
