@@ -168,14 +168,14 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
   # Initialize parameters
   alpha <- 0  # Intercept
   beta <- rep(0, p_mod)  # Main effect coefficients
-  if(unlink){
-  tau_beta <- rep(1, p_mod + p_int)
-  } else {
-  tau_beta <- rep(1, p_mod)  # Prior scales for beta
-  }
   # Interaction term initialization
   p_int <- (p_mod * (p_mod - 1)) / 2  # Number of interaction terms
   beta_int <- rep(0, p_int)  # Interaction effect coefficients
+  if(unlink){
+    tau_beta <- rep(1, p_mod + p_int)
+  } else {
+    tau_beta <- rep(1, p_mod)  # Prior scales for beta
+  }
   if(general_params_updated$global_shrinkage){
     tau_int <- 1 #linkage set to one for global shrinkage. 
   } else {
@@ -191,7 +191,11 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
   num_chains <- general_params_updated$num_chains
   alpha_samples <- matrix(0, nrow = num_chains, ncol = num_mcmc)
   beta_samples <- array(0, dim = c(num_chains, num_mcmc, p_mod))
-  tau_beta_samples <- array(0, dim = c(num_chains, num_mcmc, p_mod))
+  if(unlink){
+    tau_beta_samples <- array(0, dim = c(num_chains, num_mcmc, p_mod+p_int))
+  } else {
+    tau_beta_samples <- array(0, dim = c(num_chains, num_mcmc, p_mod))
+  }
   beta_int_samples <- array(0, dim = c(num_chains, num_mcmc, p_int))
   tau_int_samples <- matrix(0, nrow = num_chains, ncol = num_mcmc)
   tau_glob_samples <- matrix(0, nrow = num_chains, ncol = num_mcmc)
@@ -948,7 +952,12 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
       beta_int_end <- beta_int_start + p_int - 1
       
       tau_beta_start <- beta_int_end + 1
-      tau_beta_end <- tau_beta_start + p_mod - 1
+      
+      if(unlink){
+        tau_beta_end <- tau_beta_start + p_mod + p_int - 1
+      } else {
+        tau_beta_end <- tau_beta_start + p_mod - 1
+      }
       
       residual_start <- tau_beta_end + 1
       residual_end <- residual_start + n - 1
@@ -1238,7 +1247,11 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
         beta_int_end <- beta_int_start + p_int - 1
         
         tau_beta_start <- beta_int_end + 1
-        tau_beta_end <- tau_beta_start + p_mod - 1
+        if(unlink){
+          tau_beta_end <- tau_beta_start + p_mod + p_int - 1
+        } else {
+          tau_beta_end <- tau_beta_start + p_mod - 1
+        }
         
         residual_start <- tau_beta_end + 1
         residual_end <- residual_start + n - 1

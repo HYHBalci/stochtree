@@ -482,7 +482,10 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
   int p_mod = X.ncol();
   // number of interaction pairs = p_mod*(p_mod+1)/2
   int p_int = (p_mod * (p_mod - 1)) / 2;
-   
+  if (unlink && (tau_beta.size() < (size_t)(p_mod + p_int))) {
+    stop("tau_beta is too short for unlink=true! Need at least p_mod + p_int entries.");
+  }
+  
   // Build the interaction-pair index list
   std::vector<std::pair<int,int>> int_pairs;
   int_pairs.reserve(p_int);
