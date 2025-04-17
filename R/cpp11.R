@@ -552,16 +552,16 @@ sample_beta_j_cpp <- function(N, r_beta, z, w_j, tau_j, sigma, tau_glob) {
   .Call(`_stochtree_sample_beta_j_cpp`, N, r_beta, z, w_j, tau_j, sigma, tau_glob)
 }
 
-sample_tau_j_slice <- function(tau_old, beta_j, index, beta_int, tau, tau_int, sigma, interaction, step_out, max_steps, tau_glob) {
-  .Call(`_stochtree_sample_tau_j_slice`, tau_old, beta_j, index, beta_int, tau, tau_int, sigma, interaction, step_out, max_steps, tau_glob)
+sample_tau_j_slice <- function(tau_old, beta_j, index, beta_int, tau, tau_int, sigma, interaction, step_out, max_steps, tau_glob, unlink) {
+  .Call(`_stochtree_sample_tau_j_slice`, tau_old, beta_j, index, beta_int, tau, tau_int, sigma, interaction, step_out, max_steps, tau_glob, unlink)
 }
 
 sample_alpha_cpp <- function(N, r_alpha, z_, sigma, alpha_prior_sd) {
   .Call(`_stochtree_sample_alpha_cpp`, N, r_alpha, z_, sigma, alpha_prior_sd)
 }
 
-updateLinearTreatmentCpp_cpp <- function(X, Z, residual, alpha, beta, beta_int, tau_beta, tau_int, sigma, alpha_prior_sd, tau_glob, global_shrink) {
-  .Call(`_stochtree_updateLinearTreatmentCpp_cpp`, X, Z, residual, alpha, beta, beta_int, tau_beta, tau_int, sigma, alpha_prior_sd, tau_glob, global_shrink)
+updateLinearTreatmentCpp_cpp <- function(X, Z, residual, alpha, beta, beta_int, tau_beta, tau_int, sigma, alpha_prior_sd, tau_glob, global_shrink, unlink) {
+  .Call(`_stochtree_updateLinearTreatmentCpp_cpp`, X, Z, residual, alpha, beta, beta_int, tau_beta, tau_int, sigma, alpha_prior_sd, tau_glob, global_shrink, unlink)
 }
 
 forest_container_get_max_leaf_index_cpp <- function(forest_container, forest_num) {

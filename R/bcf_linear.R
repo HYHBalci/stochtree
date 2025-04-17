@@ -156,24 +156,31 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
     adaptive_coding = TRUE, control_coding_init = -0.5, 
     treated_coding_init = 0.5, rfx_prior_var = NULL, 
     random_seed = -1, keep_burnin = FALSE, keep_gfr = FALSE, 
-    keep_every = 1, num_chains = 1, verbose = T, global_shrinkage = F
-  )
+    keep_every = 1, num_chains = 1, verbose = T, global_shrinkage = F, unlink = F
+  ) #Unlink variable to get seperate tau,j,k for the interaction terms. 
   general_params_updated <- preprocessParams(
     general_params_default, general_params
   )
-
+  unlink <- general_params$unlink 
   # Initialize linear part.
   p_mod <- ncol(X_train)
   n <- nrow(X_train)
   # Initialize parameters
   alpha <- 0  # Intercept
   beta <- rep(0, p_mod)  # Main effect coefficients
+  if(unlink){
+  tau_beta <- rep(1, p_mod + p_int)
+  } else {
   tau_beta <- rep(1, p_mod)  # Prior scales for beta
-  
+  }
   # Interaction term initialization
   p_int <- (p_mod * (p_mod - 1)) / 2  # Number of interaction terms
   beta_int <- rep(0, p_int)  # Interaction effect coefficients
-  tau_int <- 0.5  # Prior scale for interactions
+  if(general_params_updated$global_shrinkage){
+    tau_int <- 1 #linkage set to one for global shrinkage. 
+  } else {
+    tau_int <- 0.5 
+  }
   tau_glob <- 1 # prior scale for global shrinkage 
   
   # Residual standard deviation
@@ -931,7 +938,8 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
         sigma = current_sigma2,
         alpha_prior_sd = 10.0,
         tau_glob = tau_glob,
-        global_shrink = global_shrinkage  
+        global_shrink = global_shrinkage,
+        unlink = unlink
       )
       beta_start <- 4
       beta_end <- beta_start + p_mod - 1
@@ -1220,7 +1228,8 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
           sigma = current_sigma2,
           alpha_prior_sd = 10.0,
           tau_glob = tau_glob,
-          global_shrink = global_shrinkage  
+          global_shrink = global_shrinkage,
+          unlink = unlink 
         )
         beta_start <- 4
         beta_end <- beta_start + p_mod - 1

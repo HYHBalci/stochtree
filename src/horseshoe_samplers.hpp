@@ -24,7 +24,8 @@ double sample_tau_j_slice(
     bool interaction = true,  // or default false
     double step_out = 0.5,
     int max_steps = 50, double tau_glob = 1,  
-    bool global_shrink = false 
+    bool global_shrink = false,
+    bool unlink = false
 );
 
 double sample_alpha_cpp(int N, cpp11::writable::doubles r_alpha,
@@ -37,6 +38,6 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp(
     cpp11::doubles_matrix<> X, cpp11::doubles Z, cpp11::writable::doubles residual,
     double alpha, cpp11::writable::doubles beta, cpp11::writable::doubles beta_int,
     cpp11::writable::doubles tau_beta, double tau_int, double sigma, double alpha_prior_sd, double tau_glob = 1, 
-    bool global_shrink = false);
+    bool global_shrink = false, bool unlink = false);
 
 #endif 
