@@ -157,7 +157,7 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
     treated_coding_init = 0.5, rfx_prior_var = NULL, 
     random_seed = -1, keep_burnin = FALSE, keep_gfr = FALSE, 
     keep_every = 1, num_chains = 1, verbose = T, global_shrinkage = F, unlink = F, 
-    propensity_seperate = F, step_out = 0.5, max_steps = 50, gibbs = F 
+    propensity_seperate = F, step_out = 0.5, max_steps = 50, gibbs = F, save_output = F
   ) #Unlink variable to get seperate tau,j,k for the interaction terms. 
   general_params_updated <- preprocessParams(
     general_params_default, general_params
@@ -277,6 +277,7 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
   ## SAMPLER SETTINGS FOR LINEAR SLICE SAMPLER.
   max_steps <- general_params_updated$max_steps
   step_out <- general_params_updated$step_out
+  save_output <- general_params_updated$save_output
   # 2. Mu forest parameters
   num_trees_mu <- prognostic_forest_params_updated$num_trees
   alpha_mu <- prognostic_forest_params_updated$alpha
@@ -974,6 +975,7 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
         unlink = unlink,
         propensity_seperate = propensity_seperate,
         gibbs = gibbs,
+        save_output = save_output,
         max_steps = max_steps,
         step_out = step_out
         
@@ -1311,6 +1313,7 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
           unlink = unlink,
           propensity_seperate = propensity_seperate,
           gibbs = gibbs,
+          save_output = save_output,
           max_steps = max_steps,
           step_out = step_out
           

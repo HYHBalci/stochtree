@@ -478,6 +478,7 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     bool unlink = false,
     bool propensity_seperate = false,
     bool gibbs = false,
+    bool save_output = true, 
     int max_steps = 50,
     double step_out = 0.5
 )
@@ -749,10 +750,13 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
       output.push_back(val);
     }
     
+    if(save_output){
+      
+    
     save_output_vector_labeled(
       alpha, tau_int, tau_glob, gamma, xi, sigma,
       beta, beta_int, tau_beta, nu, residual
     );
-    
+    }
     return output;
 }
