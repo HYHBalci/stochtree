@@ -30,6 +30,58 @@ inline bool is_invalid(double x) {
   return (!std::isfinite(x) || std::isnan(x));
 } 
 
+[[cpp11::register]]
+double rinvgamma(double shape, double scale) {
+  if (shape <= 0.0 || scale <= 0.0) {
+    stop("Shape and scale must be positive.");
+  }
+  
+  double g = Rf_rgamma(shape, 1 / scale);
+  double out = 1.0 / g;
+  return out;
+}
+
+void save_output_vector_labeled(
+    double alpha, double tau_int, double tau_glob, double gamma, double xi, double sigma, 
+    const cpp11::writable::doubles& beta,
+    const cpp11::writable::doubles& beta_int,
+    const cpp11::writable::doubles& tau_beta,
+    const cpp11::writable::doubles& nu,
+    const cpp11::writable::doubles& residual,
+    const std::string& filename = "output_log.txt"
+) {
+  std::ofstream outfile(filename, std::ios::app);
+  if (!outfile.is_open()) {
+    
+    return;
+  }
+  
+  outfile << "=== Iteration Output ===\n";
+  outfile << "alpha: " << alpha << "\n";
+  outfile << "tau_int: " << tau_int << "\n";
+  outfile << "tau_glob: " << tau_glob << "\n";
+  outfile << "gamma: " << gamma << "\n";
+  outfile << "xi: " << xi << "\n";
+  outfile << "sigma: " << sigma << "\n";
+  auto write_vector = [&](const std::string& name, const cpp11::writable::doubles& vec) {
+    outfile << name << ": ";
+    for (size_t i = 0; i < vec.size(); ++i) {
+      outfile << vec[i];
+      if (i < vec.size() - 1) outfile << ", ";
+    }
+    outfile << "\n";
+  };
+  
+  write_vector("beta", beta);
+  write_vector("beta_int", beta_int);
+  write_vector("tau_beta", tau_beta);
+  write_vector("nu", nu);
+  write_vector("residual", residual);
+  outfile << "\n";  // blank line between iterations
+  outfile.close();
+}
+
+
 // --------------------------------------------
 // 1) sample_beta_j
 [[cpp11::register]]
@@ -413,9 +465,11 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     cpp11::writable::doubles residual,     // current total fit from the model
     double alpha,                          // current alpha
     cpp11::writable::doubles beta,  
-    double gamma, // current beta vector
+    double gamma,                          // current beta vector
     cpp11::writable::doubles beta_int,     // interaction betas
-    cpp11::writable::doubles tau_beta,     // local scales for each beta_j
+    cpp11::writable::doubles tau_beta,  
+    cpp11::writable::doubles nu,
+    double xi,                             // local scales for each beta_j
     double tau_int,                        // scale for interactions
     double sigma,                          // current noise sd
     double alpha_prior_sd,
@@ -423,6 +477,7 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     bool global_shrink = false,
     bool unlink = false,
     bool propensity_seperate = false,
+    bool gibbs = false,
     int max_steps = 50,
     double step_out = 0.5
 )
@@ -480,7 +535,6 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
   // Make std::vector copies so we can pass them to sample_tau_j_slice
   std::vector<double> beta_int_std(beta_int.begin(), beta_int.end());
   std::vector<double> tau_beta_std(tau_beta.begin(), tau_beta.end());
-   
   for(int j = 0; j < p_mod; j++){
     // 2a) Remove old beta_j from residual
     for(int i = 0; i < n; i++){
@@ -500,22 +554,29 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
       residual[i] -= Z[i] * beta_j_new * X(i,j);
     } 
     beta[j] = beta_j_new;
-      
-    // 2b) Sample local scale tau_beta[j] via slice
-    double tb_j_new = sample_tau_j_slice(
-      tau_beta[j],          // old tau_j
-              beta[j],              // new beta_j 
-                  j,                    // index
-                  beta_int_std,         // entire vector of interaction betas
-                  tau_beta_std,         // entire vector of tau_beta
-                  tau_int,              // global interaction scale
-                  sigma,                // noise sd
-                  true,                 // interaction = true
-                  step_out,                  // step_out
-                  max_steps,
-                  tau_glob,
-                  unlink
-    );
+    double tb_j_new; 
+
+    // 2b) Sample local scale tau_beta[j] via slice or via conjugate prior. 
+    if(gibbs){
+      nu[j] = rinvgamma(1, 1 + 1 / (tau_beta[j]*tau_beta[j]));
+
+      tb_j_new = std::sqrt(rinvgamma(1, (1 / nu[j]) + (beta[j] * beta[j]) / (2*tau_glob*tau_glob*sigma*sigma))); // Following Makalic, Schmidt A simple sampler for the horseshoe estimator.
+    } else {
+      tb_j_new = sample_tau_j_slice(
+        tau_beta[j],          // old tau_j
+                beta[j],              // new beta_j 
+                    j,                    // index
+                    beta_int_std,         // entire vector of interaction betas
+                    tau_beta_std,         // entire vector of tau_beta
+                    tau_int,              // global interaction scale
+                    sigma,                // noise sd
+                    true,                 // interaction = true
+                    step_out,                  // step_out
+                    max_steps,
+                    tau_glob,
+                    unlink
+      );
+    }
     tau_beta[j] = tb_j_new;
     tau_beta_std[j] = tb_j_new;
   } 
@@ -541,13 +602,14 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     
     // scale for normal prior on beta_int[k]
     double scale_int; 
+    double beta_int_new;
     if(unlink){
       scale_int = tau_beta[p_mod + k];
+      beta_int_new = sample_beta_j_cpp(n, residual, Z, w_ij, scale_int, sigma, tau_glob); //If unlink == TRUE set sigma equal to 1.
     } else{
       scale_int = std::sqrt(tau_int * tau_beta[iVar] * tau_beta[jVar]);
+      beta_int_new = sample_beta_j_cpp(n, residual, Z, w_ij, scale_int, sigma, tau_glob);
     }
-    double beta_int_new = sample_beta_j_cpp(n, residual, Z, w_ij, scale_int, sigma, tau_glob);
-     
     // Remove newly updated beta_int from residual
     for(int i = 0; i < n; i++){
       double x_ij = X(i, iVar) * X(i, jVar);
@@ -556,7 +618,12 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     beta_int[k] = beta_int_new;
     beta_int_std[k] = beta_int_new;
     if(unlink){
-    double tb_j_new = sample_tau_j_slice(
+      double tb_j_new;
+      if(gibbs){
+        nu[p_mod+k] = rinvgamma(1, 1 + 1 / (tau_beta[p_mod+k]*tau_beta[p_mod+k]));
+        tb_j_new = std::sqrt(rinvgamma(1, 1 / nu[p_mod+k] + (beta_int[k] * beta_int[k]) / (2*tau_glob*tau_glob*sigma*sigma)));
+      } else {
+      tb_j_new = sample_tau_j_slice(
       tau_beta[p_mod+k],          
               beta_int[k],              
                   k,                    // index
@@ -570,10 +637,10 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
                   tau_glob,
                   unlink
     );
-    tau_beta[p_mod+k] = tb_j_new;
-    tau_beta_std[p_mod+k] = tb_j_new;
     }
-  }
+      tau_beta[p_mod+k] = tb_j_new;
+      tau_beta_std[p_mod+k] = tb_j_new;
+    }}
    
   //------------------------------------------------
   // 4) sample tau_int using a MH step. 
@@ -581,7 +648,7 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
   std::vector<double> beta_std2(beta.begin(), beta.end());
   std::vector<double> beta_int_std2(beta_int.begin(), beta_int.end());
   std::vector<double> tau_beta_std2(tau_beta.begin(), tau_beta.end());
-  if(!global_shrink){
+  if((!global_shrink) && (!unlink)){
     double currentTauInt   = tau_int;
     double proposedTauInt  = ::Rf_runif(0.01, 1.0);
   
@@ -611,27 +678,54 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
       tau_int = 1;
     }
   if(global_shrink){
-    tau_glob = sample_tau_global_slice(tau_glob, beta_std2, beta_int_std2, tau_beta_std2, tau_int,
-      sigma);
+    if(!gibbs){
+      tau_glob = sample_tau_global_slice(tau_glob, beta_std2, beta_int_std2, tau_beta_std2, tau_int, sigma);
+    }
   }
+  if(gibbs){
+    xi = rinvgamma(1, 1 + 1 / (tau_glob*tau_glob));
+    double sum_scale;
+    if(unlink){
+      sum_scale = 0;
+      for(int i = 0; i < p_mod + p_int; i++){
+        if(i < p_mod){
+          sum_scale = sum_scale +  (beta[i]*beta[i]) / (tau_beta[i] * tau_beta[i]);
+        } else {
+          sum_scale = sum_scale + (beta_int[i-p_mod] * beta_int[i-p_mod]) / (tau_beta[i] * tau_beta[i]);
+        }
+      }
+      tau_glob = std::sqrt(rinvgamma((p_mod + p_int + 1)/2, 1/xi + (1/(2*sigma*sigma))*sum_scale));
+    } else{
+      sum_scale = 0;
+      for(int i = 0; i < p_mod; i++){
+        sum_scale += (beta[i]*beta[i]) / (tau_beta[i] * tau_beta[i]);
+      }
+      tau_glob = std::sqrt(rinvgamma((p_mod + 1)/2, 1/xi + (1/(2*sigma*sigma))*sum_scale));
+    }
+  
+  }
+  
+  
    
   //------------------------------------------------
   // Prepare output
   //------------------------------------------------
-  size_t total_size = 4 
+  size_t total_size = 5 
   + beta.size() 
     + beta_int.size() 
     + tau_beta.size() 
+    + nu.size()
     + residual.size(); 
     
     cpp11::writable::doubles output;
     output.reserve(total_size);
     
-    // alpha, tau_int, tau_glob
+    // alpha, tau_int, tau_glob, gamma 
     output.push_back(alpha);
     output.push_back(tau_int);
     output.push_back(tau_glob);
     output.push_back(gamma);
+    output.push_back(xi);
     // beta
     for(double val : beta){
       output.push_back(val);
@@ -646,10 +740,19 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     for(double val : tau_beta){
       output.push_back(val);
     }
+    // nu 
+    for(double val : nu){
+      output.push_back(val);
+    }
     // residual
     for(double val : residual){
       output.push_back(val);
     }
+    
+    save_output_vector_labeled(
+      alpha, tau_int, tau_glob, gamma, xi, sigma,
+      beta, beta_int, tau_beta, nu, residual
+    );
     
     return output;
 }

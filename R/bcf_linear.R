@@ -157,27 +157,32 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
     treated_coding_init = 0.5, rfx_prior_var = NULL, 
     random_seed = -1, keep_burnin = FALSE, keep_gfr = FALSE, 
     keep_every = 1, num_chains = 1, verbose = T, global_shrinkage = F, unlink = F, 
-    propensity_seperate = F, step_out = 0.5, max_steps = 50
+    propensity_seperate = F, step_out = 0.5, max_steps = 50, gibbs = F 
   ) #Unlink variable to get seperate tau,j,k for the interaction terms. 
   general_params_updated <- preprocessParams(
     general_params_default, general_params
   )
-  unlink <- general_params$unlink 
+  unlink <- general_params_updated$unlink 
+  gibbs <- general_params_updated$gibbs
   # Initialize linear part.
   p_mod <- ncol(X_train)
   n <- nrow(X_train)
   # Initialize parameters
   alpha <- 0  # Intercept
-  beta <- rep(0, p_mod)  # Main effect coefficients
+  beta <- rep(0, p_mod)
+  xi <- 1
   # Interaction term initialization
   p_int <- (p_mod * (p_mod - 1)) / 2  # Number of interaction terms
   beta_int <- rep(0, p_int)  # Interaction effect coefficients
-  if(unlink){
-    tau_beta <- rep(1, p_mod + p_int)
+  if (unlink) {
+    tau_beta <- c(rep(1, p_mod), rep(1, p_int))  # Separate shrinkage
+    nu <- 1 / (tau_beta^2)  # Initialize auxiliary variables
   } else {
-    tau_beta <- rep(1, p_mod)  # Prior scales for beta
+    tau_beta <- rep(1, p_mod)  # Local shrinkage parameters
+    nu <- 1 / (tau_beta^2)  # Initialize auxiliary variables
   }
-  if(general_params_updated$global_shrinkage){
+  
+  if(general_params_updated$global_shrinkage || unlink){
     tau_int <- 1 #linkage set to one for global shrinkage. 
   } else {
     tau_int <- 0.5 
@@ -188,14 +193,17 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
   sigma <- 1  
   sigma2_samples <- numeric(num_mcmc)
   
-  # Store all MCMC samples, also accross different chains. 
+  # Store all MCMC samples, accross different chains. 
   num_chains <- general_params_updated$num_chains
   alpha_samples <- matrix(0, nrow = num_chains, ncol = num_mcmc)
+  xi_samples <- matrix(0, nrow = num_chains, ncol = num_mcmc)
   beta_samples <- array(0, dim = c(num_chains, num_mcmc, p_mod))
   if(unlink){
     tau_beta_samples <- array(0, dim = c(num_chains, num_mcmc, p_mod+p_int))
+    nu_samples <- array(0, dim = c(num_chains, num_mcmc, p_mod+p_int))
   } else {
     tau_beta_samples <- array(0, dim = c(num_chains, num_mcmc, p_mod))
+    nu_samples <- array(0, dim = c(num_chains, num_mcmc, p_mod))
   }
   if (unlink && length(tau_beta) < p_mod + p_int) {
     stop("tau_beta is too short for unlink = TRUE")
@@ -205,6 +213,7 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
   gamma_samples <- matrix(0, nrow = num_chains, ncol = num_mcmc)
   tau_glob_samples <- matrix(0, nrow = num_chains, ncol = num_mcmc)
   #########
+  
   # Update mu forest BCF parameters
   prognostic_forest_params_default <- list(
     num_trees = 250, alpha = 0.95, beta = 2.0, 
@@ -549,6 +558,9 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
       has_rfx_test <- TRUE
     }
   }
+  if((!global_shrinkage) & (gibbs)){
+    stop("You can not turn on gibss sampling without global shrinkage for now!")
+  }
   
   # Check that outcome and treatment are numeric
   if (!is.numeric(y_train)) stop("y_train must be numeric")
@@ -662,7 +674,6 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
   if ((!binary_treatment) && (adaptive_coding)) {
     adaptive_coding <- FALSE
   }
-  adaptive_coding <- FALSE
   # Check if propensity_covariate is one of the required inputs
   if (!(propensity_covariate %in% c("mu","tau","both","none"))) {
     stop("propensity_covariate must equal one of 'none', 'mu', 'tau', or 'both'")
@@ -938,9 +949,14 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
       }
       
       # Sample the treatment forest
+      if(adaptive_coding){
+        Z_linear <- tau_basis_train
+      } else {
+        Z_linear <- Z_train
+      }
       update_results <- updateLinearTreatmentCpp_cpp(
         X = X_train_raw,
-        Z = Z_train,
+        Z = Z_linear,
         propensity_train = propensity_train,
         residual = outcome_train$get_data(),
         alpha = alpha,
@@ -948,6 +964,8 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
         gamma = gamma,
         beta_int = beta_int,
         tau_beta = tau_beta,
+        nu = nu,
+        xi = xi,
         tau_int = tau_int,
         sigma = current_sigma2,
         alpha_prior_sd = 10.0,
@@ -955,11 +973,12 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
         global_shrink = global_shrinkage,
         unlink = unlink,
         propensity_seperate = propensity_seperate,
+        gibbs = gibbs,
         max_steps = max_steps,
         step_out = step_out
         
       )
-      beta_start <- 5
+      beta_start <- 6 
       beta_end <- beta_start + p_mod - 1
       
       beta_int_start <- beta_end + 1
@@ -972,8 +991,13 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
       } else {
         tau_beta_end <- tau_beta_start + p_mod - 1
       }
-      
-      residual_start <- tau_beta_end + 1
+      nu_start <- tau_beta_end + 1 
+      if(unlink){
+        nu_end <- nu_start + p_mod + p_int - 1
+      } else {
+        nu_end <- nu_start + p_mod - 1
+      }
+      residual_start <- nu_end + 1
       residual_end <- residual_start + n - 1
       
       # Extract vectors
@@ -981,16 +1005,17 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
       tau_int <- update_results[2]
       tau_glob <- update_results[3]
       gamma <- update_results[4]
+      xi <- update_results[5]
       beta <- update_results[beta_start:beta_end]
       beta_int <- update_results[beta_int_start:beta_int_end]
       tau_beta <- update_results[tau_beta_start:tau_beta_end]
+      nu <- update_results[nu_start:nu_end]
       residual <- update_results[residual_start:residual_end]
       
       outcome_train$update_data(residual)
       
       # Sample coding parameters (if requested)
       if (adaptive_coding) {
-        print('Warning: still doing adaptive coding')
         # Estimate mu(X) and tau(X) and compute y - mu(X)
         mu_x_raw_train <- active_forest_mu$predict_raw(forest_dataset_train)
         tau_x_raw_train <- predict_interaction_lm(X_train_raw, c(alpha, beta, beta_int))
@@ -1055,14 +1080,7 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
   # Run MCMC
   if (num_burnin + num_mcmc > 0) {
     for (chain_num in 1:num_chains) {
-      ### Initialize New Initial Parameters to be sampled.
       linear_counter <- 0 
-      # alpha <- 0 
-      # beta <- rep(0, p_mod) 
-      # tau_beta <- rep(1, p_mod)
-      # beta_int <- rep(0, p_int) 
-      # tau_int <- 0.5
-      # 
       if (num_gfr > 0) {
         # Reset state of active_forest and forest_model based on a previous GFR sample
         forest_ind <- num_gfr - chain_num
@@ -1226,11 +1244,38 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
           active_forest = active_forest_mu, rng = rng, forest_model_config = forest_model_config_mu, 
           global_model_config = global_model_config, keep_forest = keep_sample, gfr = FALSE
         )
-        
+        rinvgamma <- function(shape, scale){
+          if (shape <= 0.0 || scale <= 0.0) {
+            stop("Shape and scale must be positive.");
+          }
+          
+          g = rgamma(1, shape, scale)
+          out = 1.0 / g
+          return(out)
+        }
         # Sample variance parameters (if requested)
         if (sample_sigma_global) {
-          current_sigma2 <- sampleGlobalErrorVarianceOneIteration(outcome_train, forest_dataset_train, rng, a_global, b_global)
-          global_model_config$update_global_error_variance(current_sigma2)
+          if(gibbs){
+            lambda_sq <- tau_beta^2  # assume 'lambda' is a vector of lambda_j
+            Lambda_inv <- diag(1 / lambda_sq)
+            if(unlink){
+              beta_tot <- c(beta, beta_int)
+              scale <- as.numeric(0.5 * crossprod(outcome_train$get_data()) + 0.5 * t(beta_tot) %*% Lambda_inv %*% beta_tot)
+              shape <- (n + p_mod + p_int) / 2
+              current_sigma2 <- sqrt(rinvgamma(shape, scale))
+            } else {
+              beta_tot <- c(beta)
+              scale <- as.numeric(0.5 * crossprod(outcome_train$get_data()) + 0.5 * t(beta_tot) %*% Lambda_inv %*% beta_tot)
+              shape <- (n + p_mod) / 2
+              current_sigma2 <- sqrt(rinvgamma(shape, scale)) #return here
+            }
+            global_model_config$update_global_error_variance(current_sigma2)
+
+            
+          } else {
+            current_sigma2 <- sampleGlobalErrorVarianceOneIteration(outcome_train, forest_dataset_train, rng, a_global, b_global)
+            global_model_config$update_global_error_variance(current_sigma2)
+          }
         }
         if (sample_sigma_leaf_mu) {
           leaf_scale_mu_double <- sampleLeafVarianceOneIteration(active_forest_mu, rng, a_leaf_mu, b_leaf_mu)
@@ -1241,9 +1286,14 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
         
         # Sample the treatment forest
         # Sample the treatment forest
+        if(adaptive_coding){
+          Z_linear <- tau_basis_train
+        } else {
+          Z_linear <- Z_train
+        }
         update_results <- updateLinearTreatmentCpp_cpp(
           X = X_train_raw,
-          Z = Z_train,
+          Z = Z_linear,
           propensity_train = propensity_train,
           residual = outcome_train$get_data(),
           alpha = alpha,
@@ -1251,6 +1301,8 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
           gamma = gamma,
           beta_int = beta_int,
           tau_beta = tau_beta,
+          nu = nu,
+          xi = xi,
           tau_int = tau_int,
           sigma = current_sigma2,
           alpha_prior_sd = 10.0,
@@ -1258,11 +1310,12 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
           global_shrink = global_shrinkage,
           unlink = unlink,
           propensity_seperate = propensity_seperate,
+          gibbs = gibbs,
           max_steps = max_steps,
           step_out = step_out
           
         )
-        beta_start <- 5
+        beta_start <- 6 
         beta_end <- beta_start + p_mod - 1
         
         beta_int_start <- beta_end + 1
@@ -1275,8 +1328,13 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
         } else {
           tau_beta_end <- tau_beta_start + p_mod - 1
         }
-        
-        residual_start <- tau_beta_end + 1
+        nu_start <- tau_beta_end + 1 
+        if(unlink){
+          nu_end <- nu_start + p_mod + p_int - 1
+        } else {
+          nu_end <- nu_start + p_mod - 1
+        }
+        residual_start <- nu_end + 1
         residual_end <- residual_start + n - 1
         
         # Extract vectors
@@ -1284,10 +1342,13 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
         tau_int <- update_results[2]
         tau_glob <- update_results[3]
         gamma <- update_results[4]
+        xi <- update_results[5]
         beta <- update_results[beta_start:beta_end]
         beta_int <- update_results[beta_int_start:beta_int_end]
         tau_beta <- update_results[tau_beta_start:tau_beta_end]
+        nu <- update_results[nu_start:nu_end]
         residual <- update_results[residual_start:residual_end]
+        
         
         outcome_train$update_data(residual)
         
@@ -1300,6 +1361,8 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
           tau_int_samples[chain_num, linear_counter] <- tau_int
           tau_glob_samples[chain_num, linear_counter] <- tau_glob
           gamma_samples[chain_num, linear_counter] <- gamma 
+          xi_samples[chain_num, linear_counter] <- xi 
+          nu_samples[chain_num, linear_counter, ] <- nu
         }
         # Sample coding parameters (if requested)
         if (adaptive_coding) {
@@ -1347,9 +1410,29 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
           )
         }
         if (sample_sigma_global) {
-          current_sigma2 <- sampleGlobalErrorVarianceOneIteration(outcome_train, forest_dataset_train, rng, a_global, b_global)
-          if (keep_sample) global_var_samples[sample_counter] <- current_sigma2
-          global_model_config$update_global_error_variance(current_sigma2)
+          if(gibbs){
+            lambda_sq <- tau_beta^2  # assume 'lambda' is a vector of lambda_j
+            Lambda_inv <- diag(1 / lambda_sq)
+            if(unlink){
+              beta_tot <- c(beta, beta_int)
+              scale <- as.numeric(0.5 * crossprod(outcome_train$get_data()) + 0.5 * t(beta_tot) %*% Lambda_inv %*% beta_tot)
+              shape <- (n + p_mod + p_int) / 2
+              current_sigma2 <- sqrt(rinvgamma(shape, scale))
+            } else {
+              beta_tot <- c(beta)
+              scale <- as.numeric(0.5 * crossprod(outcome_train$get_data()) + 0.5 * t(beta_tot) %*% Lambda_inv %*% beta_tot)
+              shape <- (n + p_mod) / 2
+              current_sigma2 <- sqrt(rinvgamma(shape, scale)) #return here
+            }
+            global_model_config$update_global_error_variance(current_sigma2)
+            if (keep_sample) global_var_samples[sample_counter] <- current_sigma2
+            
+          } else {
+            current_sigma2 <- sampleGlobalErrorVarianceOneIteration(outcome_train, forest_dataset_train, rng, a_global, b_global)
+            global_model_config$update_global_error_variance(current_sigma2)
+            if (keep_sample) global_var_samples[sample_counter] <- current_sigma2
+            
+          }
         }
         if (sample_sigma_leaf_tau) {
           leaf_scale_tau_double <- sampleLeafVarianceOneIteration(active_forest_tau, rng, a_leaf_tau, b_leaf_tau)
@@ -1505,6 +1588,8 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
     "alpha" = alpha_samples,
     "Beta" = beta_samples,
     "Tau" = tau_beta_samples,
+    "Xi" = xi_samples,
+    "Nu" = nu_samples,
     "Beta_int" = beta_int_samples,
     "Tau_int" = tau_int_samples,
     "Tau_glob" = tau_glob_samples
