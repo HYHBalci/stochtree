@@ -164,6 +164,7 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
   )
   unlink <- general_params_updated$unlink 
   gibbs <- general_params_updated$gibbs
+  save_output <- general_params_updated$save_output
   # Initialize linear part.
   p_mod <- ncol(X_train)
   n <- nrow(X_train)
@@ -278,6 +279,7 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
   keep_every <- general_params_updated$keep_every
   num_chains <- general_params_updated$num_chains
   verbose <- general_params_updated$verbose
+  save_output <- general_params_updated$save_output
   propensity_seperate <- general_params_updated$propensity_seperate
   global_shrinkage <- general_params_updated$global_shrinkage #Allow for global shrinkage in the linear part.
   ## SAMPLER SETTINGS FOR LINEAR SLICE SAMPLER.
