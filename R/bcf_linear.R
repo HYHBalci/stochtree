@@ -1607,10 +1607,7 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
       "Tau_glob" = tau_glob_samples
     )
   } else {
-  result <- list(
-    "forests_mu" = forest_samples_mu, 
-    "forests_tau" = forest_samples_tau, 
-    "model_params" = model_params, 
+  result <- list( 
     "mu_hat_train" = mu_hat_train, 
     "tau_hat_train" = tau_hat_train, 
     "Gamma" = gamma_samples,
