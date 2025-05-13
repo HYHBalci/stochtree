@@ -196,14 +196,20 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
   # Store all MCMC samples, accross different chains. 
   num_chains <- general_params_updated$num_chains
   alpha_samples <- matrix(0, nrow = num_chains, ncol = num_mcmc)
-  xi_samples <- matrix(0, nrow = num_chains, ncol = num_mcmc)
+  if(save_output){
+    xi_samples <- matrix(0, nrow = num_chains, ncol = num_mcmc)
+  }
   beta_samples <- array(0, dim = c(num_chains, num_mcmc, p_mod))
   if(unlink){
     tau_beta_samples <- array(0, dim = c(num_chains, num_mcmc, p_mod+p_int))
-    nu_samples <- array(0, dim = c(num_chains, num_mcmc, p_mod+p_int))
+    if(save_output){
+      nu_samples <- array(0, dim = c(num_chains, num_mcmc, p_mod+p_int))
+    }
   } else {
     tau_beta_samples <- array(0, dim = c(num_chains, num_mcmc, p_mod))
-    nu_samples <- array(0, dim = c(num_chains, num_mcmc, p_mod))
+    if(save_output){
+      nu_samples <- array(0, dim = c(num_chains, num_mcmc, p_mod))
+    }
   }
   if (unlink && length(tau_beta) < p_mod + p_int) {
     stop("tau_beta is too short for unlink = TRUE")
@@ -1364,8 +1370,10 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
           tau_int_samples[chain_num, linear_counter] <- tau_int
           tau_glob_samples[chain_num, linear_counter] <- tau_glob
           gamma_samples[chain_num, linear_counter] <- gamma 
-          xi_samples[chain_num, linear_counter] <- xi 
-          nu_samples[chain_num, linear_counter, ] <- nu
+          if(save_output){
+            xi_samples[chain_num, linear_counter] <- xi 
+            nu_samples[chain_num, linear_counter, ] <- nu
+          }
         }
         # Sample coding parameters (if requested)
         if (adaptive_coding) {
@@ -1579,6 +1587,26 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
     "sample_sigma_leaf_mu" = sample_sigma_leaf_mu,
     "sample_sigma_leaf_tau" = sample_sigma_leaf_tau
   )
+  if(save_output){
+    result <- list(
+      "forests_mu" = forest_samples_mu, 
+      "forests_tau" = forest_samples_tau, 
+      "model_params" = model_params, 
+      "mu_hat_train" = mu_hat_train, 
+      "tau_hat_train" = tau_hat_train, 
+      "Gamma" = gamma_samples,
+      "y_hat_train" = y_hat_train, 
+      "train_set_metadata" = X_train_metadata,
+      "alpha" = alpha_samples,
+      "Beta" = beta_samples,
+      "Tau" = tau_beta_samples,
+      "Xi" = xi_samples,
+      "Nu" = nu_samples,
+      "Beta_int" = beta_int_samples,
+      "Tau_int" = tau_int_samples,
+      "Tau_glob" = tau_glob_samples
+    )
+  } else {
   result <- list(
     "forests_mu" = forest_samples_mu, 
     "forests_tau" = forest_samples_tau, 
@@ -1591,12 +1619,10 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
     "alpha" = alpha_samples,
     "Beta" = beta_samples,
     "Tau" = tau_beta_samples,
-    "Xi" = xi_samples,
-    "Nu" = nu_samples,
     "Beta_int" = beta_int_samples,
     "Tau_int" = tau_int_samples,
     "Tau_glob" = tau_glob_samples
-  )
+  )}
   if (has_test) result[["mu_hat_test"]] = mu_hat_test
   if (has_test) result[["tau_hat_test"]] = tau_hat_test
   if (has_test) result[["y_hat_test"]] = y_hat_test
