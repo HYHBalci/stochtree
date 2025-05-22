@@ -568,8 +568,8 @@ sample_alpha_cpp <- function(N, r_alpha, z_, sigma, alpha_prior_sd) {
   .Call(`_stochtree_sample_alpha_cpp`, N, r_alpha, z_, sigma, alpha_prior_sd)
 }
 
-updateLinearTreatmentCpp_cpp <- function(X, Z, propensity_train, residual, alpha, beta, gamma, beta_int, tau_beta, nu, xi, tau_int, sigma, alpha_prior_sd, tau_glob, global_shrink, unlink, propensity_seperate, gibbs, save_output, max_steps, step_out) {
-  .Call(`_stochtree_updateLinearTreatmentCpp_cpp`, X, Z, propensity_train, residual, alpha, beta, gamma, beta_int, tau_beta, nu, xi, tau_int, sigma, alpha_prior_sd, tau_glob, global_shrink, unlink, propensity_seperate, gibbs, save_output, max_steps, step_out)
+updateLinearTreatmentCpp_cpp <- function(X, Z, propensity_train, residual, alpha, beta, gamma, beta_int, tau_beta, nu, xi, tau_int, sigma, alpha_prior_sd, tau_glob, global_shrink, unlink, propensity_seperate, gibbs, save_output, index, max_steps, step_out) {
+  .Call(`_stochtree_updateLinearTreatmentCpp_cpp`, X, Z, propensity_train, residual, alpha, beta, gamma, beta_int, tau_beta, nu, xi, tau_int, sigma, alpha_prior_sd, tau_glob, global_shrink, unlink, propensity_seperate, gibbs, save_output, index, max_steps, step_out)
 }
 
 forest_container_get_max_leaf_index_cpp <- function(forest_container, forest_num) {

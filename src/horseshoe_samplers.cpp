@@ -7,6 +7,9 @@
 #include <vector>
 #include <fstream>
 #include <iostream> 
+#include <Eigen/Dense>
+#include <Eigen/Cholesky>
+
 // For runif, rnorm, rgamma; these are part of R's C API.
 // If you'd prefer a different RNG, replace these calls accordingly.
 #include <Rmath.h> // ensures R::rnorm, R::runif, R::rgamma work
@@ -48,6 +51,7 @@ void save_output_vector_labeled(
     const cpp11::writable::doubles& tau_beta,
     const cpp11::writable::doubles& nu,
     const cpp11::writable::doubles& residual,
+    int index,
     const std::string& filename = "output_log.txt"
 ) {
   std::ofstream outfile(filename, std::ios::app);
@@ -57,6 +61,7 @@ void save_output_vector_labeled(
   }
   
   outfile << "=== Iteration Output ===\n";
+  outfile << "index: " << index << "\n";
   outfile << "alpha: " << alpha << "\n";
   outfile << "tau_int: " << tau_int << "\n";
   outfile << "tau_glob: " << tau_glob << "\n";
@@ -478,7 +483,8 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     bool unlink = false,
     bool propensity_seperate = false,
     bool gibbs = false,
-    bool save_output = true, 
+    bool save_output = true,
+    int index = 1, // iteration index of the sampling routine.
     int max_steps = 50,
     double step_out = 0.5
 )
@@ -755,7 +761,7 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     
     save_output_vector_labeled(
       alpha, tau_int, tau_glob, gamma, xi, sigma,
-      beta, beta_int, tau_beta, nu, residual
+      beta, beta_int, tau_beta, nu, residual, index = index
     );
     }
     return output;

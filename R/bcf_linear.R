@@ -984,6 +984,7 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
         propensity_seperate = propensity_seperate,
         gibbs = gibbs,
         save_output = save_output,
+        index = 184892,
         max_steps = max_steps,
         step_out = step_out
         
@@ -1322,6 +1323,7 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
           propensity_seperate = propensity_seperate,
           gibbs = gibbs,
           save_output = save_output,
+          index = sample_counter,
           max_steps = max_steps,
           step_out = step_out
           
