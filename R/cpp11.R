@@ -548,6 +548,30 @@ root_reset_active_forest_cpp <- function(active_forest) {
   invisible(.Call(`_stochtree_root_reset_active_forest_cpp`, active_forest))
 }
 
+rinvgamma <- function(shape, scale) {
+  .Call(`_stochtree_rinvgamma`, shape, scale)
+}
+
+sample_beta_j_cpp <- function(N, r_beta, z, w_j, tau_j, sigma, tau_glob) {
+  .Call(`_stochtree_sample_beta_j_cpp`, N, r_beta, z, w_j, tau_j, sigma, tau_glob)
+}
+
+sample_tau_j_slice <- function(tau_old, beta_j, index, beta_int, tau, tau_int, sigma, interaction, step_out, max_steps, tau_glob, unlink) {
+  .Call(`_stochtree_sample_tau_j_slice`, tau_old, beta_j, index, beta_int, tau, tau_int, sigma, interaction, step_out, max_steps, tau_glob, unlink)
+}
+
+sample_tau_global_slice <- function(tau_old, beta, beta_int, tau, tau_int, sigma, interaction, step_out, max_steps, unlink) {
+  .Call(`_stochtree_sample_tau_global_slice`, tau_old, beta, beta_int, tau, tau_int, sigma, interaction, step_out, max_steps, unlink)
+}
+
+sample_alpha_cpp <- function(N, r_alpha, z_, sigma, alpha_prior_sd) {
+  .Call(`_stochtree_sample_alpha_cpp`, N, r_alpha, z_, sigma, alpha_prior_sd)
+}
+
+updateLinearTreatmentCpp_cpp <- function(X, Z, propensity_train, residual, alpha, beta, gamma, beta_int, tau_beta, nu, xi, tau_int, sigma, alpha_prior_sd, tau_glob, global_shrink, unlink, propensity_seperate, gibbs, save_output, index, max_steps, step_out) {
+  .Call(`_stochtree_updateLinearTreatmentCpp_cpp`, X, Z, propensity_train, residual, alpha, beta, gamma, beta_int, tau_beta, nu, xi, tau_int, sigma, alpha_prior_sd, tau_glob, global_shrink, unlink, propensity_seperate, gibbs, save_output, index, max_steps, step_out)
+}
+
 forest_container_get_max_leaf_index_cpp <- function(forest_container, forest_num) {
   .Call(`_stochtree_forest_container_get_max_leaf_index_cpp`, forest_container, forest_num)
 }
@@ -594,6 +618,22 @@ update_min_samples_leaf_tree_prior_cpp <- function(tree_prior_ptr, min_samples_l
 
 update_max_depth_tree_prior_cpp <- function(tree_prior_ptr, max_depth) {
   invisible(.Call(`_stochtree_update_max_depth_tree_prior_cpp`, tree_prior_ptr, max_depth))
+}
+
+get_alpha_tree_prior_cpp <- function(tree_prior_ptr) {
+  .Call(`_stochtree_get_alpha_tree_prior_cpp`, tree_prior_ptr)
+}
+
+get_beta_tree_prior_cpp <- function(tree_prior_ptr) {
+  .Call(`_stochtree_get_beta_tree_prior_cpp`, tree_prior_ptr)
+}
+
+get_min_samples_leaf_tree_prior_cpp <- function(tree_prior_ptr) {
+  .Call(`_stochtree_get_min_samples_leaf_tree_prior_cpp`, tree_prior_ptr)
+}
+
+get_max_depth_tree_prior_cpp <- function(tree_prior_ptr) {
+  .Call(`_stochtree_get_max_depth_tree_prior_cpp`, tree_prior_ptr)
 }
 
 forest_tracker_cpp <- function(data, feature_types, num_trees, n) {
