@@ -1,6 +1,7 @@
 #include <cpp11.hpp>             // main cpp11 header
 #include <cpp11/doubles.hpp>     // for doubles, writable::doubles
-#include <cpp11/list.hpp>        // for writable::list
+#include <cpp11/list.hpp>  
+#include <cpp11/matrix.hpp>     // for writable::list
 #include <cmath>                 // for std::log, std::sqrt
 #include <limits>                // for std::numeric_limits<double>::infinity
 #include <algorithm>             // for std::max
@@ -9,6 +10,7 @@
 #include <iostream> 
 #include <Eigen/Dense>
 #include <Eigen/Cholesky>
+#include <random>
 
 // For runif, rnorm, rgamma; these are part of R's C API.
 // If you'd prefer a different RNG, replace these calls accordingly.
@@ -92,9 +94,9 @@ void save_output_vector_labeled(
 [[cpp11::register]]
 double sample_beta_j_cpp(
     int N,
-    writable::doubles r_beta,
-    writable::doubles z,
-    writable::doubles w_j,
+    writable::doubles& r_beta,
+    writable::doubles& z,
+    writable::doubles& w_j,
     double tau_j,
     double sigma,
     double tau_glob = 1
@@ -459,15 +461,25 @@ static double loglikeTauInt(
   }
   return logp;
 }
+
+bool is_integer_not_in_list_cpp(cpp11::integers r_int_vector, int target_value) {
+  for (int value_in_vector : r_int_vector) {
+    if (value_in_vector == target_value) {
+      return false; 
+    }
+  }
+  return true; 
+}
  
 // --------------------------------------------
 // 6) updateLinearTreatmentCpp
-// [[cpp11::register]]
+[[cpp11::register]]
 cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     cpp11::doubles_matrix<> X,
     cpp11::doubles Z,    
     cpp11::doubles propensity_train,
     cpp11::writable::doubles residual,
+    cpp11::integers are_continous,
     double alpha,
     cpp11::writable::doubles beta,  
     double gamma,
@@ -487,27 +499,31 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     int index = 1,
     int max_steps = 50,
     double step_out = 0.5
-)
-{
+){
   int n = residual.size();
   int p_mod = X.ncol();
-  int p_int = (p_mod * (p_mod - 1)) / 2;
+  int p_int = beta_int.size();
+  double sigma2 = sigma * sigma; 
   
   if (unlink && (tau_beta.size() < (size_t)(p_mod + p_int))) {
     stop("tau_beta is too short for unlink=true! Needs p_mod + p_int entries.");
   }
-  if (unlink && (nu.size() < (size_t)(p_mod + p_int))) {
-    // Assuming 'nu' is also appropriately sized by the caller if unlink is true.
-  }
+
   
   // Prepare pairs of indices for interaction terms
   std::vector<std::pair<int,int>> int_pairs;
   int_pairs.reserve(p_int);
   for(int i = 0; i < p_mod; i++){
     for(int j = i + 1; j < p_mod; j++){
-      int_pairs.push_back(std::make_pair(i, j));
+      // Only allow interactions where of the variables is continous. 
+      if((are_continous[i] ==1) | (are_continous[j]==1)){
+          int_pairs.push_back(std::make_pair(i, j));
+      }
     }
   }  
+  if (unlink && (tau_beta.size() < (size_t)(p_mod + p_int))) {
+    stop("tau_beta is too short for unlink=true! Needs p_mod + p_int entries.");
+  }
   
   // Optionally, update propensity score adjustment (gamma)
   if(propensity_seperate){
@@ -539,6 +555,9 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     // Block sample main (beta) and interaction (beta_int) coefficients using Gibbs
     int P_combined = p_mod + p_int; // Total number of beta coefficients
     
+    Eigen::Map<const Eigen::MatrixXd> X_map(REAL(X), n, p_mod);
+    Eigen::Map<const Eigen::VectorXd> Z_map(REAL(Z), n);
+    Eigen::Map<Eigen::VectorXd> y_target_map(REAL(residual), n);
     // 1. Construct the target variable for this regression step.
     // This is y_target = current_residual + (fit from old betas)
     // which equals y - Z*alpha - propensity*gamma
@@ -650,20 +669,6 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
         tau_beta_std[full_idx] = tau_beta[full_idx]; 
       }
     }
-    
-    // Sample global shrinkage parameter (tau_glob) and its auxiliary (xi)
-    if(global_shrink){ 
-      // This '!gibbs' seemed odd here, as we are in the 'if (gibbs)' block.
-      // If 'global_shrink' is true, 'tau_glob' is typically updated.
-      // The original code had a slice sampler call here under '!gibbs'.
-      // For full Gibbs, 'tau_glob' and 'xi' are updated below.
-      // If you intended a slice sample for tau_glob *even within the main Gibbs block* under some condition,
-      // that logic would need to be preserved or clarified.
-      // Assuming for full Gibbs, we proceed to sample tau_glob and xi via their conditionals.
-      // if(!gibbs) { ... slice sampler call ... } 
-      // This part might need review based on your exact model intentions.
-    }
-    
     if (global_shrink) { // This is the Gibbs update for tau_glob and xi
       xi = rinvgamma(1.0, 1.0 + 1.0 / safe_var(tau_glob*tau_glob)); 
       double sum_scaled_sq_betas = 0.0;
@@ -696,7 +701,7 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
       }
       
       double shape_tau_glob = (static_cast<double>(n_params_for_tau_glob) + 1.0) / 2.0;
-      double rate_tau_glob = (1.0 / safe_var(xi)) + (1.0 / safe_var(2.0 * sigma * sigma)) * sum_scaled_sq_betas;
+      double rate_tau_glob = (1.0 / safe_var(xi)) + (1.0 / safe_var(2.0 * sigma2)) * sum_scaled_sq_betas;
       tau_glob = std::sqrt(safe_var(rinvgamma(shape_tau_glob, rate_tau_glob)));
     } 
     // If not global_shrink, tau_glob remains fixed, and xi isn't updated.
@@ -808,3 +813,326 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
   }
   return output;
 }
+
+
+ /////////////////////////////////////////////////////////
+/// LOGISTIC REGRESSION LINKED SHRINKAGE + HORSESHOE. ///
+////////////////////////////////////////////////////////
+// 
+// std::vector<std::pair<int, int>> create_interaction_pairs(int p_main) {
+//   std::vector<std::pair<int, int>> pairs;
+//   if (p_main < 2) return pairs;
+//   for (int j = 0; j < p_main; ++j) {
+//     for (int k = j + 1; k < p_main; ++k) {
+//       pairs.push_back({j, k});
+//     }
+//   }
+//   return pairs;
+// }
+// 
+// [[cpp11::register]]
+// cpp11::list linked_shrinkage_logistic_gibbs(
+//     cpp11::integers R_y,            
+//     cpp11::doubles_matrix<> R_X,   
+//     cpp11::doubles R_Z,             
+//     int n_iter,
+//     int burn_in,
+//     double alpha_prior_sd = 10.0,
+//     double aleph_prior_sd = 10.0,
+//     double init_alpha = 0.0,
+//     double init_aleph = 0.0,
+//     unsigned int seed = 1848
+// ) {
+//   cpp11::function set_seed_r = cpp11::package("base")["set.seed"];
+//   set_seed_r(seed);
+//   
+//   int N = R_X.nrow(); 
+//   int p_main = R_X.ncol();
+//   
+//   // --- Copy data from cpp11 to Eigen (simplification to avoid Map errors) ---
+//   Eigen::VectorXi y(N);
+//   for (int i = 0; i < N; ++i) {
+//     y(i) = R_y[i]; 
+//   }
+//   
+//   Eigen::MatrixXd X(N, p_main);
+//   for (int j = 0; j < p_main; ++j) { 
+//     for (int i = 0; i < N; ++i) {
+//       X(i, j) = R_X(i, j); 
+//     }
+//   }
+//   
+//   Eigen::VectorXd Z(N);
+//   for (int i = 0; i < N; ++i) {
+//     Z(i) = R_Z[i]; 
+//   }
+//   // --- End Data Copy ---
+//   
+//   std::vector<std::pair<int, int>> main_interaction_indices = create_interaction_pairs(p_main);
+//   int p_interaction_main = main_interaction_indices.size();
+//   
+//   double alpha = init_alpha;
+//   double aleph = init_aleph;
+//   Eigen::VectorXd beta = Eigen::VectorXd::Zero(p_main);
+//   Eigen::VectorXd beta_interaction = Eigen::VectorXd::Zero(p_interaction_main);
+//   Eigen::VectorXd gamma = Eigen::VectorXd::Zero(p_main);
+//   Eigen::VectorXd gamma_int = Eigen::VectorXd::Zero(p_interaction_main);
+//   
+//   Eigen::VectorXd tau_j_params = Eigen::VectorXd::Ones(p_main);
+//   Eigen::VectorXd zeta_tau_j = Eigen::VectorXd::Ones(p_main);
+//   const double tau_int_param = 1.0; 
+//   
+//   Eigen::VectorXd lambda_gamma = Eigen::VectorXd::Ones(p_main);
+//   Eigen::VectorXd nu_gamma = Eigen::VectorXd::Ones(p_main);
+//   Eigen::VectorXd lambda_g_int = Eigen::VectorXd::Ones(p_interaction_main);
+//   Eigen::VectorXd nu_g_int = Eigen::VectorXd::Ones(p_interaction_main);
+//   double tau_hs_combined = 1.0;
+//   double xi_hs_combined = 1.0;
+//   
+//   Eigen::VectorXd omega = Eigen::VectorXd::Ones(N);
+//   Eigen::VectorXd eta = Eigen::VectorXd::Zero(N);
+//   Eigen::VectorXd kappa = y.cast<double>().array() - 0.5; // Uses the Eigen 'y'
+//   
+//   int num_samples_to_store = n_iter - burn_in;
+//   if (num_samples_to_store <= 0) {
+//     cpp11::stop("n_iter must be greater than burn_in.");
+//   }
+//   
+//   // These declarations might still cause "alias template deduction" errors if there's a
+//   // C++17 vs C++20 feature use issue with your cpp11 version / compiler.
+//   cpp11::writable::doubles alpha_samples; alpha_samples.reserve(num_samples_to_store);
+//   cpp11::writable::doubles_matrix beta_samples(num_samples_to_store, p_main);
+//   cpp11::writable::doubles_matrix beta_interaction_samples(num_samples_to_store, std::max(1, p_interaction_main));
+//   if (p_interaction_main == 0 && num_samples_to_store > 0) {
+//     beta_interaction_samples = cpp11::writable::doubles_matrix(num_samples_to_store, 0);
+//   }
+//   cpp11::writable::doubles aleph_samples; aleph_samples.reserve(num_samples_to_store);
+//   cpp11::writable::doubles_matrix gamma_samples(num_samples_to_store, p_main); 
+//   cpp11::writable::doubles_matrix gamma_int_samples(num_samples_to_store, std::max(1,p_interaction_main)); 
+//   if (p_interaction_main == 0 && num_samples_to_store > 0) {
+//     gamma_int_samples = cpp11::writable::doubles_matrix(num_samples_to_store, 0);
+//   }
+//   cpp11::writable::doubles_matrix tau_j_samples(num_samples_to_store, p_main);
+//   cpp11::writable::doubles_matrix lambda_gamma_samples(num_samples_to_store, p_main);
+//   cpp11::writable::doubles_matrix lambda_g_int_samples(num_samples_to_store, std::max(1,p_interaction_main));
+//   if (p_interaction_main == 0 && num_samples_to_store > 0) {
+//     lambda_g_int_samples = cpp11::writable::doubles_matrix(num_samples_to_store, 0);
+//   }
+//   cpp11::writable::doubles tau_hs_combined_samples; tau_hs_combined_samples.reserve(num_samples_to_store);
+//   
+//   int current_sample_idx = 0;
+//   cpp11::function rpg_cpp = cpp11::package("BayesLogit")["rpg"];
+//   
+//   for (int iter = 0; iter < n_iter; ++iter) {
+//     // 1. Update Linear Predictor eta
+//     eta = X * beta; // X is now the Eigen::MatrixXd copy
+//     eta.array() += alpha;
+//     if (p_interaction_main > 0) { 
+//       for (int k = 0; k < p_interaction_main; ++k) {
+//         eta.array() += beta_interaction(k) * (X.col(main_interaction_indices[k].first).array() * X.col(main_interaction_indices[k].second).array());
+//       }
+//     }
+//     Eigen::VectorXd treatment_modifier_part = Eigen::VectorXd::Zero(N);
+//     treatment_modifier_part.setConstant(aleph);
+//     treatment_modifier_part += X * gamma;
+//     if (p_interaction_main > 0) { 
+//       for (int k = 0; k < p_interaction_main; ++k) {
+//         treatment_modifier_part.array() += gamma_int(k) * (X.col(main_interaction_indices[k].first).array() * X.col(main_interaction_indices[k].second).array());
+//       }
+//     }
+//     eta.array() += Z.array() * treatment_modifier_part.array(); // Z is now Eigen::VectorXd
+//     
+//     // 2. Sample Polya-Gamma latent variables omega_i
+//     cpp11::writable::doubles eta_cpp(N);
+//     for(int i=0; i<N; ++i) eta_cpp[i] = std::abs(eta[i]);
+//     cpp11::writable::doubles pg_b_param(N);
+//     for(int i=0; i<N; ++i) pg_b_param[i] = 1.0;
+//     cpp11::doubles omega_new_cpp = cpp11::as_doubles(rpg_cpp(N, pg_b_param, eta_cpp));
+//     for(int i=0; i<N; ++i) omega[i] = omega_new_cpp[i];
+//     
+//     // 3. Sample Regression Coefficients 
+//     int current_total_coeffs = 1 + p_main + (p_interaction_main > 0 ? p_interaction_main : 0) + 
+//       1 + p_main + (p_interaction_main > 0 ? p_interaction_main : 0);
+//     Eigen::MatrixXd X_full(N, current_total_coeffs); 
+//     int col_counter = 0;
+//     X_full.col(col_counter).setOnes(); col_counter++; 
+//     X_full.block(0, col_counter, N, p_main) = X; col_counter += p_main; 
+//     if (p_interaction_main > 0) {
+//       for (int k = 0; k < p_interaction_main; ++k) {
+//         X_full.col(col_counter + k) = X.col(main_interaction_indices[k].first).array() * X.col(main_interaction_indices[k].second).array();
+//       }
+//       col_counter += p_interaction_main; 
+//     }
+//     X_full.col(col_counter) = Z; col_counter++; 
+//     for (int l = 0; l < p_main; ++l) {
+//       X_full.col(col_counter + l) = Z.array() * X.col(l).array();
+//     }
+//     col_counter += p_main; 
+//     if (p_interaction_main > 0) {
+//       for (int k = 0; k < p_interaction_main; ++k) {
+//         X_full.col(col_counter + k) = Z.array() * (X.col(main_interaction_indices[k].first).array() * X.col(main_interaction_indices[k].second).array());
+//       }
+//     } 
+//     
+//     Eigen::VectorXd Y_star = kappa.array() / omega.array(); 
+//     Eigen::MatrixXd Omega_diag_mat = omega.asDiagonal(); 
+//     Eigen::MatrixXd Xt_Omega_X = X_full.transpose() * Omega_diag_mat * X_full;
+//     Eigen::VectorXd Xt_Omega_Y = X_full.transpose() * Omega_diag_mat * Y_star;
+//     
+//     Eigen::VectorXd prior_precision_diag_vec(current_total_coeffs); 
+//     col_counter = 0;
+//     prior_precision_diag_vec(col_counter) = 1.0 / safe_var(alpha_prior_sd * alpha_prior_sd); col_counter++; 
+//     for (int j = 0; j < p_main; ++j) {
+//       prior_precision_diag_vec(col_counter + j) = 1.0 / safe_var(tau_j_params(j) * tau_j_params(j));
+//     }
+//     col_counter += p_main; 
+//     if (p_interaction_main > 0) {
+//       for (int k = 0; k < p_interaction_main; ++k) {
+//         double var_jk = safe_var(tau_j_params(main_interaction_indices[k].first) *
+//                                  tau_j_params(main_interaction_indices[k].second) *
+//                                  tau_int_param); 
+//         prior_precision_diag_vec(col_counter + k) = 1.0 / var_jk;
+//       }
+//       col_counter += p_interaction_main; 
+//     }
+//     prior_precision_diag_vec(col_counter) = 1.0 / safe_var(aleph_prior_sd * aleph_prior_sd); col_counter++; 
+//     for (int l = 0; l < p_main; ++l) { 
+//       prior_precision_diag_vec(col_counter + l) = 1.0 / safe_var(lambda_gamma(l) * lambda_gamma(l) * tau_hs_combined * tau_hs_combined);
+//     }
+//     col_counter += p_main; 
+//     if (p_interaction_main > 0) {
+//       for (int k = 0; k < p_interaction_main; ++k) { 
+//         prior_precision_diag_vec(col_counter + k) = 1.0 / safe_var(lambda_g_int(k) * lambda_g_int(k) * tau_hs_combined * tau_hs_combined);
+//       }
+//     } 
+//     
+//     Eigen::MatrixXd P_inv = prior_precision_diag_vec.asDiagonal(); 
+//     Eigen::MatrixXd posterior_precision = Xt_Omega_X + P_inv;
+//     Eigen::LLT<Eigen::MatrixXd> llt(posterior_precision);
+//     if(llt.info() != Eigen::Success) {
+//       double jitter = 1e-6; 
+//       Eigen::MatrixXd eye = Eigen::MatrixXd::Identity(current_total_coeffs, current_total_coeffs); 
+//       posterior_precision += jitter * eye; 
+//       llt.compute(posterior_precision); 
+//       if(llt.info() != Eigen::Success) cpp11::stop("Cholesky failed even with jitter. Aborting.");
+//     }
+//     Eigen::VectorXd posterior_mean = llt.solve(Xt_Omega_Y);
+//     Eigen::VectorXd z_norm(current_total_coeffs); 
+//     for(int i=0; i<current_total_coeffs; ++i) z_norm(i) = Rf_rnorm(0,1); 
+//     Eigen::MatrixXd L_matrix = llt.matrixL(); 
+//     Eigen::MatrixXd L_transpose_inv = L_matrix.transpose().inverse(); 
+//     Eigen::VectorXd sampled_coeffs = posterior_mean + L_transpose_inv * z_norm;
+//     
+//     col_counter = 0; 
+//     alpha = sampled_coeffs(col_counter); col_counter++;
+//     beta = sampled_coeffs.segment(col_counter, p_main); col_counter += p_main;
+//     if (p_interaction_main > 0) {
+//       beta_interaction = sampled_coeffs.segment(col_counter, p_interaction_main);
+//       col_counter += p_interaction_main;
+//     } else { beta_interaction.setZero(); }
+//     aleph = sampled_coeffs(col_counter); col_counter++;
+//     gamma = sampled_coeffs.segment(col_counter, p_main); col_counter += p_main;
+//     if (p_interaction_main > 0) {
+//       gamma_int = sampled_coeffs.segment(col_counter, p_interaction_main);
+//     } else { gamma_int.setZero(); }
+//     
+//     // 4. Sample tau_j_params 
+//     for (int j = 0; j < p_main; ++j) {
+//       zeta_tau_j(j) = rinvgamma(1.0, 1.0 + 1.0 / safe_var(tau_j_params(j) * tau_j_params(j)));
+//       double sum_sq_beta_terms = beta(j) * beta(j);
+//       int num_dependent_coeffs = 1;
+//       if (p_interaction_main > 0) {
+//         for (int k_int = 0; k_int < p_interaction_main; ++k_int) {
+//           int idx1 = main_interaction_indices[k_int].first;
+//           int idx2 = main_interaction_indices[k_int].second;
+//           if (idx1 == j) {
+//             sum_sq_beta_terms += beta_interaction(k_int) * beta_interaction(k_int) /
+//               safe_var(tau_j_params(idx2) * tau_j_params(idx2) * tau_int_param * tau_int_param); 
+//             num_dependent_coeffs++;
+//           } else if (idx2 == j) {
+//             sum_sq_beta_terms += beta_interaction(k_int) * beta_interaction(k_int) /
+//               safe_var(tau_j_params(idx1) * tau_j_params(idx1) * tau_int_param * tau_int_param);
+//             num_dependent_coeffs++;
+//           }
+//         }
+//       }
+//       tau_j_params(j) = std::sqrt(safe_var(rinvgamma(0.5 + (double)num_dependent_coeffs / 2.0,
+//                                            1.0 / zeta_tau_j(j) + sum_sq_beta_terms / 2.0)));
+//     }
+//     
+//     // 6. Sample Local Horseshoe parameters for gamma
+//     for (int l = 0; l < p_main; ++l) {
+//       lambda_gamma(l) = std::sqrt(safe_var(rinvgamma(1.0, 1.0/nu_gamma(l) + (gamma(l)*gamma(l)) / safe_var(2.0*tau_hs_combined*tau_hs_combined))));
+//       nu_gamma(l) = rinvgamma(1.0, 1.0 + 1.0/safe_var(lambda_gamma(l)*lambda_gamma(l)));
+//     }
+//     
+//     // 7. Sample Local Horseshoe parameters for gamma_int
+//     if (p_interaction_main > 0) {
+//       for (int k = 0; k < p_interaction_main; ++k) {
+//         lambda_g_int(k) = std::sqrt(safe_var(rinvgamma(1.0, 1.0/nu_g_int(k) + (gamma_int(k)*gamma_int(k)) / safe_var(2.0*tau_hs_combined*tau_hs_combined))));
+//         nu_g_int(k) = rinvgamma(1.0, 1.0 + 1.0/safe_var(lambda_g_int(k)*lambda_g_int(k)));
+//       }
+//     }
+//     
+//     // 8. Sample SHARED Global Horseshoe parameter tau_hs_combined
+//     double sum_gamma_over_lambda_sq = 0;
+//     for (int l = 0; l < p_main; ++l) {
+//       sum_gamma_over_lambda_sq += (gamma(l)*gamma(l)) / safe_var(lambda_gamma(l)*lambda_gamma(l));
+//     }
+//     double sum_g_int_over_lambda_sq = 0;
+//     if (p_interaction_main > 0) {
+//       for (int k = 0; k < p_interaction_main; ++k) {
+//         sum_g_int_over_lambda_sq += (gamma_int(k)*gamma_int(k)) / safe_var(lambda_g_int(k)*lambda_g_int(k));
+//       }
+//     }
+//     int total_coeffs_for_hs = p_main + (p_interaction_main > 0 ? p_interaction_main : 0) ; 
+//     if (total_coeffs_for_hs > 0) { 
+//       tau_hs_combined = std::sqrt(safe_var(rinvgamma( (double)(total_coeffs_for_hs + 1.0)/2.0, 
+//                                                       1.0/xi_hs_combined + (sum_gamma_over_lambda_sq + sum_g_int_over_lambda_sq)/2.0)));
+//       xi_hs_combined = rinvgamma(1.0, 1.0 + 1.0/safe_var(tau_hs_combined*tau_hs_combined));
+//     } else { 
+//       tau_hs_combined = 1.0; 
+//       xi_hs_combined = 1.0;
+//     }
+//     
+//     // Store Samples
+//     if (iter >= burn_in) {
+//       alpha_samples.push_back(alpha);
+//       aleph_samples.push_back(aleph);
+//       tau_hs_combined_samples.push_back(tau_hs_combined);
+//       
+//       for(int j=0; j<p_main; ++j) beta_samples(current_sample_idx, j) = beta(j);
+//       if (p_interaction_main > 0) {
+//         for(int k=0; k<p_interaction_main; ++k) beta_interaction_samples(current_sample_idx, k) = beta_interaction(k);
+//       }
+//       for(int j=0; j<p_main; ++j) gamma_samples(current_sample_idx, j) = gamma(j);
+//       if (p_interaction_main > 0) {
+//         for(int k=0; k<p_interaction_main; ++k) gamma_int_samples(current_sample_idx, k) = gamma_int(k);
+//       }
+//       for(int j=0; j<p_main; ++j) tau_j_samples(current_sample_idx, j) = tau_j_params(j);
+//       for(int j=0; j<p_main; ++j) lambda_gamma_samples(current_sample_idx, j) = lambda_gamma(j);
+//       if (p_interaction_main > 0) {
+//         for(int k=0; k<p_interaction_main; ++k) lambda_g_int_samples(current_sample_idx, k) = lambda_g_int(k);
+//       }
+//       current_sample_idx++;
+//     }
+//   } // End MCMC loop
+//   
+//   cpp11::writable::doubles fixed_tau_int_value; 
+//   fixed_tau_int_value.push_back(tau_int_param);
+//   
+//   // Using explicit cpp11::named_arg constructor
+//   return cpp11::writable::list({
+//     cpp11::named_arg("alpha", alpha_samples),
+//     cpp11::named_arg("beta", beta_samples),
+//     cpp11::named_arg("beta_interaction", beta_interaction_samples),
+//     cpp11::named_arg("aleph", aleph_samples),
+//     cpp11::named_arg("gamma", gamma_samples),
+//     cpp11::named_arg("gamma_int", gamma_int_samples),
+//     cpp11::named_arg("tau_j", tau_j_samples),
+//     cpp11::named_arg("tau_int_fixed_value", fixed_tau_int_value), 
+//     cpp11::named_arg("lambda_gamma", lambda_gamma_samples),
+//     cpp11::named_arg("lambda_g_int", lambda_g_int_samples),
+//     cpp11::named_arg("tau_hs_combined", tau_hs_combined_samples)
+//   });
+// }
