@@ -60,4 +60,21 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     double step_out = 0.5
 );
 
+cpp11::list run_mcmc_sampler_2(
+    const cpp11::matrix<cpp11::r_vector<double>, cpp11::by_column>& X_r,
+    const cpp11::r_vector<double>& Y_r,
+    const cpp11::r_vector<double>& Z_r,
+    const cpp11::integers& are_continuous_r, // This type is already read-only
+    const cpp11::r_vector<double>& propensity_scores_r,
+    int num_iterations, int burn_in,
+    bool mu_gibbs, bool mu_global_shrink, bool mu_unlink, int mu_p_int,
+    bool tau_gibbs, bool tau_global_shrink, bool tau_unlink, int tau_p_int,
+    bool propensity_separate = false, double alpha_prior_sd = 10.0,
+    double sigma_init = 1.0,
+    double alpha_mu_init = 0.0, double alpha_tau_init = 0.0,
+    const cpp11::r_vector<double>& beta_mu_init = {}, const cpp11::r_vector<double>& beta_int_mu_init = {},
+    const cpp11::r_vector<double>& beta_tau_init = {}, const cpp11::r_vector<double>& beta_int_tau_init = {},
+    double tau_glob_mu_init = 1.0, double tau_glob_tau_init = 1.0
+);
+
 #endif 
