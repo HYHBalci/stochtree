@@ -183,7 +183,6 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
     print(handled_data_list$p_int + ncol(X_train))
   }
   X_train <- handled_data_list$X_final
-  # print(dim(X_train))
   X_final_var_info <- handled_data_list$X_final_var_info
   X_train_raw <- X_train
   p_int <- handled_data_list$p_int
