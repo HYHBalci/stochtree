@@ -568,324 +568,240 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
   return output;
 }
 
- /////////////////////////////////////////////////////////
-/// LOGISTIC REGRESSION LINKED SHRINKAGE + HORSESHOE. ///
-////////////////////////////////////////////////////////
-// 
-// std::vector<std::pair<int, int>> create_interaction_pairs(int p_main) {
-//   std::vector<std::pair<int, int>> pairs;
-//   if (p_main < 2) return pairs;
-//   for (int j = 0; j < p_main; ++j) {
-//     for (int k = j + 1; k < p_main; ++k) {
-//       pairs.push_back({j, k});
-//     }
-//   }
-//   return pairs;
-// }
-// 
-// [[cpp11::register]]
-// cpp11::list linked_shrinkage_logistic_gibbs(
-//     cpp11::integers R_y,            
-//     cpp11::doubles_matrix<> R_X,   
-//     cpp11::doubles R_Z,             
-//     int n_iter,
-//     int burn_in,
-//     double alpha_prior_sd = 10.0,
-//     double aleph_prior_sd = 10.0,
-//     double init_alpha = 0.0,
-//     double init_aleph = 0.0,
-//     unsigned int seed = 1848
-// ) {
-//   cpp11::function set_seed_r = cpp11::package("base")["set.seed"];
-//   set_seed_r(seed);
-//   
-//   int N = R_X.nrow(); 
-//   int p_main = R_X.ncol();
-//   
-//   // --- Copy data from cpp11 to Eigen (simplification to avoid Map errors) ---
-//   Eigen::VectorXi y(N);
-//   for (int i = 0; i < N; ++i) {
-//     y(i) = R_y[i]; 
-//   }
-//   
-//   Eigen::MatrixXd X(N, p_main);
-//   for (int j = 0; j < p_main; ++j) { 
-//     for (int i = 0; i < N; ++i) {
-//       X(i, j) = R_X(i, j); 
-//     }
-//   }
-//   
-//   Eigen::VectorXd Z(N);
-//   for (int i = 0; i < N; ++i) {
-//     Z(i) = R_Z[i]; 
-//   }
-//   // --- End Data Copy ---
-//   
-//   std::vector<std::pair<int, int>> main_interaction_indices = create_interaction_pairs(p_main);
-//   int p_interaction_main = main_interaction_indices.size();
-//   
-//   double alpha = init_alpha;
-//   double aleph = init_aleph;
-//   Eigen::VectorXd beta = Eigen::VectorXd::Zero(p_main);
-//   Eigen::VectorXd beta_interaction = Eigen::VectorXd::Zero(p_interaction_main);
-//   Eigen::VectorXd gamma = Eigen::VectorXd::Zero(p_main);
-//   Eigen::VectorXd gamma_int = Eigen::VectorXd::Zero(p_interaction_main);
-//   
-//   Eigen::VectorXd tau_j_params = Eigen::VectorXd::Ones(p_main);
-//   Eigen::VectorXd zeta_tau_j = Eigen::VectorXd::Ones(p_main);
-//   const double tau_int_param = 1.0; 
-//   
-//   Eigen::VectorXd lambda_gamma = Eigen::VectorXd::Ones(p_main);
-//   Eigen::VectorXd nu_gamma = Eigen::VectorXd::Ones(p_main);
-//   Eigen::VectorXd lambda_g_int = Eigen::VectorXd::Ones(p_interaction_main);
-//   Eigen::VectorXd nu_g_int = Eigen::VectorXd::Ones(p_interaction_main);
-//   double tau_hs_combined = 1.0;
-//   double xi_hs_combined = 1.0;
-//   
-//   Eigen::VectorXd omega = Eigen::VectorXd::Ones(N);
-//   Eigen::VectorXd eta = Eigen::VectorXd::Zero(N);
-//   Eigen::VectorXd kappa = y.cast<double>().array() - 0.5; // Uses the Eigen 'y'
-//   
-//   int num_samples_to_store = n_iter - burn_in;
-//   if (num_samples_to_store <= 0) {
-//     cpp11::stop("n_iter must be greater than burn_in.");
-//   }
-//   
-//   // These declarations might still cause "alias template deduction" errors if there's a
-//   // C++17 vs C++20 feature use issue with your cpp11 version / compiler.
-//   cpp11::writable::doubles alpha_samples; alpha_samples.reserve(num_samples_to_store);
-//   cpp11::writable::doubles_matrix beta_samples(num_samples_to_store, p_main);
-//   cpp11::writable::doubles_matrix beta_interaction_samples(num_samples_to_store, std::max(1, p_interaction_main));
-//   if (p_interaction_main == 0 && num_samples_to_store > 0) {
-//     beta_interaction_samples = cpp11::writable::doubles_matrix(num_samples_to_store, 0);
-//   }
-//   cpp11::writable::doubles aleph_samples; aleph_samples.reserve(num_samples_to_store);
-//   cpp11::writable::doubles_matrix gamma_samples(num_samples_to_store, p_main); 
-//   cpp11::writable::doubles_matrix gamma_int_samples(num_samples_to_store, std::max(1,p_interaction_main)); 
-//   if (p_interaction_main == 0 && num_samples_to_store > 0) {
-//     gamma_int_samples = cpp11::writable::doubles_matrix(num_samples_to_store, 0);
-//   }
-//   cpp11::writable::doubles_matrix tau_j_samples(num_samples_to_store, p_main);
-//   cpp11::writable::doubles_matrix lambda_gamma_samples(num_samples_to_store, p_main);
-//   cpp11::writable::doubles_matrix lambda_g_int_samples(num_samples_to_store, std::max(1,p_interaction_main));
-//   if (p_interaction_main == 0 && num_samples_to_store > 0) {
-//     lambda_g_int_samples = cpp11::writable::doubles_matrix(num_samples_to_store, 0);
-//   }
-//   cpp11::writable::doubles tau_hs_combined_samples; tau_hs_combined_samples.reserve(num_samples_to_store);
-//   
-//   int current_sample_idx = 0;
-//   cpp11::function rpg_cpp = cpp11::package("BayesLogit")["rpg"];
-//   
-//   for (int iter = 0; iter < n_iter; ++iter) {
-//     // 1. Update Linear Predictor eta
-//     eta = X * beta; // X is now the Eigen::MatrixXd copy
-//     eta.array() += alpha;
-//     if (p_interaction_main > 0) { 
-//       for (int k = 0; k < p_interaction_main; ++k) {
-//         eta.array() += beta_interaction(k) * (X.col(main_interaction_indices[k].first).array() * X.col(main_interaction_indices[k].second).array());
-//       }
-//     }
-//     Eigen::VectorXd treatment_modifier_part = Eigen::VectorXd::Zero(N);
-//     treatment_modifier_part.setConstant(aleph);
-//     treatment_modifier_part += X * gamma;
-//     if (p_interaction_main > 0) { 
-//       for (int k = 0; k < p_interaction_main; ++k) {
-//         treatment_modifier_part.array() += gamma_int(k) * (X.col(main_interaction_indices[k].first).array() * X.col(main_interaction_indices[k].second).array());
-//       }
-//     }
-//     eta.array() += Z.array() * treatment_modifier_part.array(); // Z is now Eigen::VectorXd
-//     
-//     // 2. Sample Polya-Gamma latent variables omega_i
-//     cpp11::writable::doubles eta_cpp(N);
-//     for(int i=0; i<N; ++i) eta_cpp[i] = std::abs(eta[i]);
-//     cpp11::writable::doubles pg_b_param(N);
-//     for(int i=0; i<N; ++i) pg_b_param[i] = 1.0;
-//     cpp11::doubles omega_new_cpp = cpp11::as_doubles(rpg_cpp(N, pg_b_param, eta_cpp));
-//     for(int i=0; i<N; ++i) omega[i] = omega_new_cpp[i];
-//     
-//     // 3. Sample Regression Coefficients 
-//     int current_total_coeffs = 1 + p_main + (p_interaction_main > 0 ? p_interaction_main : 0) + 
-//       1 + p_main + (p_interaction_main > 0 ? p_interaction_main : 0);
-//     Eigen::MatrixXd X_full(N, current_total_coeffs); 
-//     int col_counter = 0;
-//     X_full.col(col_counter).setOnes(); col_counter++; 
-//     X_full.block(0, col_counter, N, p_main) = X; col_counter += p_main; 
-//     if (p_interaction_main > 0) {
-//       for (int k = 0; k < p_interaction_main; ++k) {
-//         X_full.col(col_counter + k) = X.col(main_interaction_indices[k].first).array() * X.col(main_interaction_indices[k].second).array();
-//       }
-//       col_counter += p_interaction_main; 
-//     }
-//     X_full.col(col_counter) = Z; col_counter++; 
-//     for (int l = 0; l < p_main; ++l) {
-//       X_full.col(col_counter + l) = Z.array() * X.col(l).array();
-//     }
-//     col_counter += p_main; 
-//     if (p_interaction_main > 0) {
-//       for (int k = 0; k < p_interaction_main; ++k) {
-//         X_full.col(col_counter + k) = Z.array() * (X.col(main_interaction_indices[k].first).array() * X.col(main_interaction_indices[k].second).array());
-//       }
-//     } 
-//     
-//     Eigen::VectorXd Y_star = kappa.array() / omega.array(); 
-//     Eigen::MatrixXd Omega_diag_mat = omega.asDiagonal(); 
-//     Eigen::MatrixXd Xt_Omega_X = X_full.transpose() * Omega_diag_mat * X_full;
-//     Eigen::VectorXd Xt_Omega_Y = X_full.transpose() * Omega_diag_mat * Y_star;
-//     
-//     Eigen::VectorXd prior_precision_diag_vec(current_total_coeffs); 
-//     col_counter = 0;
-//     prior_precision_diag_vec(col_counter) = 1.0 / safe_var(alpha_prior_sd * alpha_prior_sd); col_counter++; 
-//     for (int j = 0; j < p_main; ++j) {
-//       prior_precision_diag_vec(col_counter + j) = 1.0 / safe_var(tau_j_params(j) * tau_j_params(j));
-//     }
-//     col_counter += p_main; 
-//     if (p_interaction_main > 0) {
-//       for (int k = 0; k < p_interaction_main; ++k) {
-//         double var_jk = safe_var(tau_j_params(main_interaction_indices[k].first) *
-//                                  tau_j_params(main_interaction_indices[k].second) *
-//                                  tau_int_param); 
-//         prior_precision_diag_vec(col_counter + k) = 1.0 / var_jk;
-//       }
-//       col_counter += p_interaction_main; 
-//     }
-//     prior_precision_diag_vec(col_counter) = 1.0 / safe_var(aleph_prior_sd * aleph_prior_sd); col_counter++; 
-//     for (int l = 0; l < p_main; ++l) { 
-//       prior_precision_diag_vec(col_counter + l) = 1.0 / safe_var(lambda_gamma(l) * lambda_gamma(l) * tau_hs_combined * tau_hs_combined);
-//     }
-//     col_counter += p_main; 
-//     if (p_interaction_main > 0) {
-//       for (int k = 0; k < p_interaction_main; ++k) { 
-//         prior_precision_diag_vec(col_counter + k) = 1.0 / safe_var(lambda_g_int(k) * lambda_g_int(k) * tau_hs_combined * tau_hs_combined);
-//       }
-//     } 
-//     
-//     Eigen::MatrixXd P_inv = prior_precision_diag_vec.asDiagonal(); 
-//     Eigen::MatrixXd posterior_precision = Xt_Omega_X + P_inv;
-//     Eigen::LLT<Eigen::MatrixXd> llt(posterior_precision);
-//     if(llt.info() != Eigen::Success) {
-//       double jitter = 1e-6; 
-//       Eigen::MatrixXd eye = Eigen::MatrixXd::Identity(current_total_coeffs, current_total_coeffs); 
-//       posterior_precision += jitter * eye; 
-//       llt.compute(posterior_precision); 
-//       if(llt.info() != Eigen::Success) cpp11::stop("Cholesky failed even with jitter. Aborting.");
-//     }
-//     Eigen::VectorXd posterior_mean = llt.solve(Xt_Omega_Y);
-//     Eigen::VectorXd z_norm(current_total_coeffs); 
-//     for(int i=0; i<current_total_coeffs; ++i) z_norm(i) = Rf_rnorm(0,1); 
-//     Eigen::MatrixXd L_matrix = llt.matrixL(); 
-//     Eigen::MatrixXd L_transpose_inv = L_matrix.transpose().inverse(); 
-//     Eigen::VectorXd sampled_coeffs = posterior_mean + L_transpose_inv * z_norm;
-//     
-//     col_counter = 0; 
-//     alpha = sampled_coeffs(col_counter); col_counter++;
-//     beta = sampled_coeffs.segment(col_counter, p_main); col_counter += p_main;
-//     if (p_interaction_main > 0) {
-//       beta_interaction = sampled_coeffs.segment(col_counter, p_interaction_main);
-//       col_counter += p_interaction_main;
-//     } else { beta_interaction.setZero(); }
-//     aleph = sampled_coeffs(col_counter); col_counter++;
-//     gamma = sampled_coeffs.segment(col_counter, p_main); col_counter += p_main;
-//     if (p_interaction_main > 0) {
-//       gamma_int = sampled_coeffs.segment(col_counter, p_interaction_main);
-//     } else { gamma_int.setZero(); }
-//     
-//     // 4. Sample tau_j_params 
-//     for (int j = 0; j < p_main; ++j) {
-//       zeta_tau_j(j) = rinvgamma(1.0, 1.0 + 1.0 / safe_var(tau_j_params(j) * tau_j_params(j)));
-//       double sum_sq_beta_terms = beta(j) * beta(j);
-//       int num_dependent_coeffs = 1;
-//       if (p_interaction_main > 0) {
-//         for (int k_int = 0; k_int < p_interaction_main; ++k_int) {
-//           int idx1 = main_interaction_indices[k_int].first;
-//           int idx2 = main_interaction_indices[k_int].second;
-//           if (idx1 == j) {
-//             sum_sq_beta_terms += beta_interaction(k_int) * beta_interaction(k_int) /
-//               safe_var(tau_j_params(idx2) * tau_j_params(idx2) * tau_int_param * tau_int_param); 
-//             num_dependent_coeffs++;
-//           } else if (idx2 == j) {
-//             sum_sq_beta_terms += beta_interaction(k_int) * beta_interaction(k_int) /
-//               safe_var(tau_j_params(idx1) * tau_j_params(idx1) * tau_int_param * tau_int_param);
-//             num_dependent_coeffs++;
-//           }
-//         }
-//       }
-//       tau_j_params(j) = std::sqrt(safe_var(rinvgamma(0.5 + (double)num_dependent_coeffs / 2.0,
-//                                            1.0 / zeta_tau_j(j) + sum_sq_beta_terms / 2.0)));
-//     }
-//     
-//     // 6. Sample Local Horseshoe parameters for gamma
-//     for (int l = 0; l < p_main; ++l) {
-//       lambda_gamma(l) = std::sqrt(safe_var(rinvgamma(1.0, 1.0/nu_gamma(l) + (gamma(l)*gamma(l)) / safe_var(2.0*tau_hs_combined*tau_hs_combined))));
-//       nu_gamma(l) = rinvgamma(1.0, 1.0 + 1.0/safe_var(lambda_gamma(l)*lambda_gamma(l)));
-//     }
-//     
-//     // 7. Sample Local Horseshoe parameters for gamma_int
-//     if (p_interaction_main > 0) {
-//       for (int k = 0; k < p_interaction_main; ++k) {
-//         lambda_g_int(k) = std::sqrt(safe_var(rinvgamma(1.0, 1.0/nu_g_int(k) + (gamma_int(k)*gamma_int(k)) / safe_var(2.0*tau_hs_combined*tau_hs_combined))));
-//         nu_g_int(k) = rinvgamma(1.0, 1.0 + 1.0/safe_var(lambda_g_int(k)*lambda_g_int(k)));
-//       }
-//     }
-//     
-//     // 8. Sample SHARED Global Horseshoe parameter tau_hs_combined
-//     double sum_gamma_over_lambda_sq = 0;
-//     for (int l = 0; l < p_main; ++l) {
-//       sum_gamma_over_lambda_sq += (gamma(l)*gamma(l)) / safe_var(lambda_gamma(l)*lambda_gamma(l));
-//     }
-//     double sum_g_int_over_lambda_sq = 0;
-//     if (p_interaction_main > 0) {
-//       for (int k = 0; k < p_interaction_main; ++k) {
-//         sum_g_int_over_lambda_sq += (gamma_int(k)*gamma_int(k)) / safe_var(lambda_g_int(k)*lambda_g_int(k));
-//       }
-//     }
-//     int total_coeffs_for_hs = p_main + (p_interaction_main > 0 ? p_interaction_main : 0) ; 
-//     if (total_coeffs_for_hs > 0) { 
-//       tau_hs_combined = std::sqrt(safe_var(rinvgamma( (double)(total_coeffs_for_hs + 1.0)/2.0, 
-//                                                       1.0/xi_hs_combined + (sum_gamma_over_lambda_sq + sum_g_int_over_lambda_sq)/2.0)));
-//       xi_hs_combined = rinvgamma(1.0, 1.0 + 1.0/safe_var(tau_hs_combined*tau_hs_combined));
-//     } else { 
-//       tau_hs_combined = 1.0; 
-//       xi_hs_combined = 1.0;
-//     }
-//     
-//     // Store Samples
-//     if (iter >= burn_in) {
-//       alpha_samples.push_back(alpha);
-//       aleph_samples.push_back(aleph);
-//       tau_hs_combined_samples.push_back(tau_hs_combined);
-//       
-//       for(int j=0; j<p_main; ++j) beta_samples(current_sample_idx, j) = beta(j);
-//       if (p_interaction_main > 0) {
-//         for(int k=0; k<p_interaction_main; ++k) beta_interaction_samples(current_sample_idx, k) = beta_interaction(k);
-//       }
-//       for(int j=0; j<p_main; ++j) gamma_samples(current_sample_idx, j) = gamma(j);
-//       if (p_interaction_main > 0) {
-//         for(int k=0; k<p_interaction_main; ++k) gamma_int_samples(current_sample_idx, k) = gamma_int(k);
-//       }
-//       for(int j=0; j<p_main; ++j) tau_j_samples(current_sample_idx, j) = tau_j_params(j);
-//       for(int j=0; j<p_main; ++j) lambda_gamma_samples(current_sample_idx, j) = lambda_gamma(j);
-//       if (p_interaction_main > 0) {
-//         for(int k=0; k<p_interaction_main; ++k) lambda_g_int_samples(current_sample_idx, k) = lambda_g_int(k);
-//       }
-//       current_sample_idx++;
-//     }
-//   } // End MCMC loop
-//   
-//   cpp11::writable::doubles fixed_tau_int_value; 
-//   fixed_tau_int_value.push_back(tau_int_param);
-//   
-//   // Using explicit cpp11::named_arg constructor
-//   return cpp11::writable::list({
-//     cpp11::named_arg("alpha", alpha_samples),
-//     cpp11::named_arg("beta", beta_samples),
-//     cpp11::named_arg("beta_interaction", beta_interaction_samples),
-//     cpp11::named_arg("aleph", aleph_samples),
-//     cpp11::named_arg("gamma", gamma_samples),
-//     cpp11::named_arg("gamma_int", gamma_int_samples),
-//     cpp11::named_arg("tau_j", tau_j_samples),
-//     cpp11::named_arg("tau_int_fixed_value", fixed_tau_int_value), 
-//     cpp11::named_arg("lambda_gamma", lambda_gamma_samples),
-//     cpp11::named_arg("lambda_g_int", lambda_g_int_samples),
-//     cpp11::named_arg("tau_hs_combined", tau_hs_combined_samples)
-//   });
-// }
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// SECTION 3: MCMC SAMPLER WRAPPER
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Eigen::VectorXd calculate_component_fit(
+    const doubles_matrix<>& X, const Eigen::VectorXd& moderator, const doubles& beta,
+    const doubles& beta_int, const integers& are_continuous, double alpha, bool propensity_seperate,
+    double gamma, const doubles& propensity_scores_r) {
+  int n = X.nrow();
+  int p_mod = X.ncol();
+  Eigen::Map<const Eigen::MatrixXd> X_map(REAL(X), n, p_mod);
+  Eigen::Map<const Eigen::VectorXd> beta_map(REAL(beta), beta.size());
+  
+  Eigen::VectorXd fit = Eigen::VectorXd::Zero(n);
+  for (int j = 0; j < p_mod; ++j) {
+    fit.array() += moderator.array() * X_map.col(j).array() * beta_map(j);
+  }
+  
+  if (beta_int.size() > 0) {
+    Eigen::Map<const Eigen::VectorXd> beta_int_map(REAL(beta_int), beta_int.size());
+    int p_int_count = 0;
+    for (int i = 0; i < p_mod; i++) {
+      for (int j = i + 1; j < p_mod; j++) {
+        if ((are_continuous[i] == 1) || (are_continuous[j] == 1)) {
+          if (p_int_count < beta_int.size()) {
+            fit.array() += moderator.array() * X_map.col(i).array() * X_map.col(j).array() * beta_int_map(p_int_count);
+            p_int_count++;
+          }
+        }
+      }
+    }
+  }
+  fit.array() += moderator.array() * alpha;
+  if(propensity_seperate){
+    Eigen::Map<const Eigen::VectorXd> propensity_scores(REAL(propensity_scores_r), n);
+    fit.array() += moderator.array()*propensity_scores.array()*gamma;
+  }
+  return fit; 
+}
+
+cpp11::list run_mcmc_sampler_2(
+    const cpp11::matrix<cpp11::r_vector<double>, cpp11::by_column>& X_r,
+    const cpp11::r_vector<double>& Y_r,
+    const cpp11::r_vector<double>& Z_r,
+    const cpp11::integers& are_continuous_r, // This type is already read-only
+    const cpp11::r_vector<double>& propensity_scores_r,
+    int num_iterations, int burn_in,
+    bool mu_gibbs, bool mu_global_shrink, bool mu_unlink, int mu_p_int,
+    bool tau_gibbs, bool tau_global_shrink, bool tau_unlink, int tau_p_int,
+    bool propensity_separate = false, double alpha_prior_sd = 10.0,
+    double sigma_init = 1.0,
+    double alpha_mu_init = 0.0, double alpha_tau_init = 0.0,
+    const cpp11::r_vector<double>& beta_mu_init = {}, const cpp11::r_vector<double>& beta_int_mu_init = {},
+    const cpp11::r_vector<double>& beta_tau_init = {}, const cpp11::r_vector<double>& beta_int_tau_init = {},
+    double tau_glob_mu_init = 1.0, double tau_glob_tau_init = 1.0
+){
+  
+  int n = Y_r.size();
+  int p_mod = X_r.ncol();
+  
+  // --- DATA PREPARATION: Standardize Y ---
+  writable::doubles Y_standardized_r(n);
+  double y_mean = 0.0;
+  for(double val : Y_r) { y_mean += val; }
+  y_mean /= n;
+  
+  double y_sd = 0.0;
+  for(double val : Y_r) { y_sd += (val - y_mean) * (val - y_mean); }
+  y_sd = std::sqrt(y_sd / (n - 1));
+  if (y_sd < 1e-6) y_sd = 1.0;
+  
+  for(int i = 0; i < n; ++i) { Y_standardized_r[i] = (Y_r[i] - y_mean) / y_sd; }
+  
+  // --- INITIALIZE PARAMETERS ---
+  writable::doubles beta_mu(beta_mu_init);
+  writable::doubles beta_int_mu(beta_int_mu_init);
+  writable::doubles tau_beta_mu(p_mod + mu_p_int); std::fill(tau_beta_mu.begin(), tau_beta_mu.end(), 1.0);
+  writable::doubles nu_mu(p_mod + mu_p_int); std::fill(nu_mu.begin(), nu_mu.end(), 1.0);
+  double alpha_mu = alpha_mu_init, gamma_mu = 0.0, xi_mu = 1.0, tau_int_mu = 1.0, tau_glob_mu = tau_glob_mu_init;
+  
+  writable::doubles beta_tau(beta_tau_init);
+  writable::doubles beta_int_tau(beta_int_tau_init);
+  writable::doubles tau_beta_tau(p_mod + tau_p_int); std::fill(tau_beta_tau.begin(), tau_beta_tau.end(), 1.0);
+  writable::doubles nu_tau(p_mod + tau_p_int); std::fill(nu_tau.begin(), nu_tau.end(), 1.0);
+  double alpha_tau = alpha_tau_init, gamma_tau = 0.0, xi_tau = 1.0, tau_int_tau = 1.0, tau_glob_tau = tau_glob_tau_init;
+  
+  double sigma = sigma_init / y_sd; // Scale initial sigma
+  
+  writable::doubles ones(n); std::fill(ones.begin(), ones.end(), 1.0);
+  
+  // --- STORAGE FOR SAMPLES ---
+  std::vector<std::vector<double>> s_beta_mu, s_beta_int_mu, s_tau_beta_mu;
+  std::vector<double> s_alpha_mu, s_tau_glob_mu;
+  std::vector<std::vector<double>> s_beta_tau, s_beta_int_tau, s_tau_beta_tau;
+  std::vector<double> s_alpha_tau, s_tau_glob_tau;
+  std::vector<double> s_sigma;
+  
+  // --- MCMC LOOP ---
+  for (int iter = 0; iter < num_iterations; ++iter) {
+    if ((iter + 1) % 100 == 0) {
+      Rprintf("Iteration: %d / %d | Sigma: %.4f\n", iter + 1, num_iterations, sigma * y_sd);
+    }
+    
+    // 1. UPDATE MU(X)
+    Eigen::VectorXd tau_fit = calculate_component_fit(X_r, Eigen::Map<const Eigen::VectorXd>(REAL(Z_r), n), beta_tau, beta_int_tau, are_continuous_r, alpha_tau, false, gamma_tau, propensity_scores_r);
+    writable::doubles residual_for_mu(n);
+    for(int i=0; i<n; ++i) residual_for_mu[i] = Y_standardized_r[i] - tau_fit[i];
+    
+    writable::doubles mu_output = updateLinearTreatmentCpp_cpp(
+      X_r, ones, propensity_scores_r, residual_for_mu, are_continuous_r,
+      alpha_mu, beta_mu, gamma_mu, beta_int_mu, tau_beta_mu, nu_mu, xi_mu, tau_int_mu,
+      sigma, alpha_prior_sd, tau_glob_mu, mu_global_shrink, mu_unlink,
+      propensity_separate, mu_gibbs, false, iter, 50, 0.5);
+    
+    int offset = 0;
+    alpha_mu = mu_output[offset++];
+    tau_int_mu = mu_output[offset++];
+    tau_glob_mu = mu_output[offset++];
+    gamma_mu = mu_output[offset++];
+    xi_mu = mu_output[offset++];
+    for(int j=0; j<p_mod; ++j) { beta_mu[j] = mu_output[offset++]; }
+    for(int j=0; j<mu_p_int; ++j) { beta_int_mu[j] = mu_output[offset++]; }
+    for(int j=0; j<p_mod + mu_p_int; ++j) { tau_beta_mu[j] = mu_output[offset++]; }
+    for(int j=0; j<p_mod + mu_p_int; ++j) { nu_mu[j] = mu_output[offset++]; }
+    
+    // 2. UPDATE TAU(X)
+    Eigen::VectorXd mu_fit = calculate_component_fit(X_r, Eigen::Map<const Eigen::VectorXd>(REAL(ones), n), beta_mu, beta_int_mu, are_continuous_r, alpha_mu, propensity_separate, gamma_mu, propensity_scores_r);
+    writable::doubles residual_for_tau(n);
+    for(int i=0; i<n; ++i) residual_for_tau[i] = Y_standardized_r[i] - mu_fit[i];
+    
+    writable::doubles tau_output = updateLinearTreatmentCpp_cpp(
+      X_r, Z_r, propensity_scores_r, residual_for_tau, are_continuous_r,
+      alpha_tau, beta_tau, gamma_tau, beta_int_tau, tau_beta_tau, nu_tau, xi_tau, tau_int_tau,
+      sigma, alpha_prior_sd, tau_glob_tau, tau_global_shrink, tau_unlink,
+      false, tau_gibbs, false, iter, 50, 0.5);
+    
+    offset = 0;
+    alpha_tau = tau_output[offset++];
+    tau_int_tau = tau_output[offset++];
+    tau_glob_tau = tau_output[offset++];
+    gamma_tau = tau_output[offset++];
+    xi_tau = tau_output[offset++];
+    for(int j=0; j<p_mod; ++j) { beta_tau[j] = tau_output[offset++]; }
+    for(int j=0; j<tau_p_int; ++j) { beta_int_tau[j] = tau_output[offset++]; }
+    for(int j=0; j<p_mod + tau_p_int; ++j) { tau_beta_tau[j] = tau_output[offset++]; }
+    for(int j=0; j<p_mod + tau_p_int; ++j) { nu_tau[j] = tau_output[offset++]; }
+    
+    // 3. UPDATE SIGMA
+    Eigen::Map<const Eigen::VectorXd> Y_standardized_map_const(REAL(Y_standardized_r), n);
+    Eigen::VectorXd final_residual = Y_standardized_map_const - mu_fit - tau_fit;
+    if (final_residual.hasNaN()) stop("NaN generated in final_residual at iteration %d", iter + 1);
+    
+    double shape, rate;
+    bool any_gibbs = mu_gibbs || tau_gibbs;
+    
+    if (any_gibbs) {
+      shape = (double)n / 2.0;
+      rate = final_residual.squaredNorm() / 2.0;
+    } else {
+      double sum_scaled_sq_betas = 0.0;
+      for(int j=0; j<p_mod; ++j) {
+        sum_scaled_sq_betas += (beta_mu[j] * beta_mu[j]) / safe_var(tau_beta_mu[j] * tau_beta_mu[j] * tau_glob_mu * tau_glob_mu);
+      }
+      for(int j=0; j<p_mod; ++j) {
+        sum_scaled_sq_betas += (beta_tau[j] * beta_tau[j]) / safe_var(tau_beta_tau[j] * tau_beta_tau[j] * tau_glob_tau * tau_glob_tau);
+      }
+      int total_p = p_mod * 2; // Simplified for now
+      shape = (double)(n + total_p) / 2.0;
+      rate = 0.5 * (final_residual.squaredNorm() + sum_scaled_sq_betas);
+    }
+    
+    sigma = std::sqrt(rinvgamma(shape, rate));
+    if (is_invalid(sigma)) stop("NaN generated in sigma at iteration %d. Rate was %.4f", iter + 1, rate);
+    if (sigma < 1e-6) sigma = 1e-6;
+     
+    if (iter >= burn_in) {
+      s_alpha_mu.push_back((alpha_mu * y_sd) + y_mean);
+      std::vector<double> temp_beta_mu(p_mod);
+      for(int j=0; j<p_mod; ++j) temp_beta_mu[j] = beta_mu[j] * y_sd;
+      s_beta_mu.push_back(temp_beta_mu);
+      
+      if(mu_p_int > 0) {
+        std::vector<double> temp_beta_int_mu(mu_p_int);
+        for(int j=0; j<mu_p_int; ++j) temp_beta_int_mu[j] = beta_int_mu[j] * y_sd;
+        s_beta_int_mu.push_back(temp_beta_int_mu);
+      }
+      s_tau_beta_mu.push_back(std::vector<double>(tau_beta_mu.begin(), tau_beta_mu.end()));
+      s_tau_glob_mu.push_back(tau_glob_mu);
+      
+      s_alpha_tau.push_back(alpha_tau * y_sd);
+      std::vector<double> temp_beta_tau(p_mod);
+      for(int j=0; j<p_mod; ++j) temp_beta_tau[j] = beta_tau[j] * y_sd;
+      s_beta_tau.push_back(temp_beta_tau);
+      
+      if(tau_p_int > 0) {
+        std::vector<double> temp_beta_int_tau(tau_p_int);
+        for(int j=0; j<tau_p_int; ++j) temp_beta_int_tau[j] = beta_int_tau[j] * y_sd;
+        s_beta_int_tau.push_back(temp_beta_int_tau);
+      }
+      s_tau_beta_tau.push_back(std::vector<double>(tau_beta_tau.begin(), tau_beta_tau.end()));
+      s_tau_glob_tau.push_back(tau_glob_tau);
+      
+      s_sigma.push_back(sigma * y_sd);
+    }
+  }
+  
+  auto to_matrix = [](const std::vector<std::vector<double>>& vec) {
+    if (vec.empty() || vec[0].empty()) return writable::doubles_matrix<>(0, 0);
+    R_xlen_t n_rows = vec.size();
+    R_xlen_t n_cols = vec[0].size();
+    writable::doubles_matrix<> mat(n_rows, n_cols);
+    for (R_xlen_t i = 0; i < n_rows; ++i) {
+      for (R_xlen_t j = 0; j < n_cols; ++j) {
+        mat(i, j) = vec[i][j];
+      }
+    }
+    return mat;
+  };
+  
+  return writable::list({
+    "mu_samples"_nm = writable::list({
+      "alpha"_nm = writable::doubles(s_alpha_mu.begin(), s_alpha_mu.end()),
+        "beta"_nm = to_matrix(s_beta_mu),
+        "beta_int"_nm = to_matrix(s_beta_int_mu),
+        "tau_beta"_nm = to_matrix(s_tau_beta_mu),
+        "tau_glob"_nm = writable::doubles(s_tau_glob_mu.begin(), s_tau_glob_mu.end())
+    }),
+    "tau_samples"_nm = writable::list({
+      "alpha"_nm = writable::doubles(s_alpha_tau.begin(), s_alpha_tau.end()),
+        "beta"_nm = to_matrix(s_beta_tau),
+        "beta_int"_nm = to_matrix(s_beta_int_tau),
+        "tau_beta"_nm = to_matrix(s_tau_beta_tau),
+        "tau_glob"_nm = writable::doubles(s_tau_glob_tau.begin(), s_tau_glob_tau.end())
+    }),
+    "sigma_samples"_nm = writable::doubles(s_sigma.begin(), s_sigma.end())
+  });
+}

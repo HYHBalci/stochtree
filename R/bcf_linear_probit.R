@@ -159,31 +159,24 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
     treated_coding_init = 0.5, rfx_prior_var = NULL, 
     random_seed = -1, keep_burnin = FALSE, keep_gfr = FALSE, 
     keep_every = 1, num_chains = 1, verbose = T, global_shrinkage = F, unlink = F, 
-    propensity_seperate = F, step_out = 0.5, max_steps = 50, gibbs = F, save_output = F, probit_outcome_model = F , interaction_rule = "continuous", standardize_cov = F
+    propensity_seperate = F, step_out = 0.5, max_steps = 50, gibbs = F, save_output = F, probit_outcome_model = F , interaction_rule = "continuous", standardize_cov = F, return_shapley = F
   )
   general_params_updated <- preprocessParams(
     general_params_default, general_params
   )
+  
   ####
   unlink <- general_params_updated$unlink 
   gibbs <- general_params_updated$gibbs
   save_output <- general_params_updated$save_output
   interaction_rule <- general_params_updated$interaction_rule
   standardize_cov <- general_params_updated$standardize_cov
+  return_shapley <- general_params_updated$return_shapley
   # Interaction term initialization
   
-  # Data handling
-  if(general_params_updated$verbose){
-    print("Pre-Processing data!")
-  }
   handled_data_list <- standardize_X_by_index(X_train, process_data = standardize_cov, interaction_rule = interaction_rule, cat_coding_method = "difference")
-  if(general_params_updated$verbose){
-    print("Pre-Processing data done!")
-    print("total number of parameters to be estimated by the model:")
-    print(handled_data_list$p_int + ncol(X_train))
-  }
+  
   X_train <- handled_data_list$X_final
-  print(dim(X_train))
   X_final_var_info <- handled_data_list$X_final_var_info
   X_train_raw <- X_train
   p_int <- handled_data_list$p_int
@@ -193,11 +186,10 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
     boolean_continuous <- as.vector(X_final_var_info$is_continuous)
   } else if(interaction_rule == 'continuous_or_binary'){
     boolean_continuous <- as.vector(X_final_var_info$is_continuous) + as.vector(X_final_var_info$is_binary)
-  } else{ #This means we allow all interactions. 
+  } else{
     boolean_continuous <- as.vector(X_final_var_info$is_continuous) + as.vector(X_final_var_info$is_binary) + as.vector(X_final_var_info$is_categorical)
   }
-  print(boolean_continuous)
-
+  
   beta_int <- rep(0, p_int) 
   p_mod <- ncol(X_train)
   n <- nrow(X_train)
@@ -361,6 +353,10 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
   keep_vars_variance <- variance_forest_params_updated$keep_vars
   drop_vars_variance <- variance_forest_params_updated$drop_vars
   
+  if(probit_outcome_model){
+    X_interaction <- generate_interaction_matrix(X=X_train_raw, X_final_var_info = X_final_var_info, interaction_rule = interaction_rule)
+    full_design_matrix_train <- as.matrix(cbind(1, X_train_raw, X_interaction))
+  }
   # Check if there are enough GFR samples to seed num_chains samplers
   if (num_gfr > 0) {
     if (num_chains > num_gfr) {
@@ -1386,7 +1382,6 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           else keep_sample <- FALSE
         }
         if (keep_sample) sample_counter <- sample_counter + 1
-        # Print progress
         if (verbose) {
           if (num_burnin > 0) {
             if (((i - num_gfr) %% 100 == 0) || ((i - num_gfr) == num_burnin)) {
@@ -1616,12 +1611,12 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
               beta_tot <- c(beta, beta_int)
               scale <- as.numeric(0.5 * crossprod(outcome_train$get_data()) + 0.5 * t(beta_tot) %*% Lambda_inv %*% beta_tot)
               shape <- (n + p_mod + p_int) / 2
-              current_sigma2 <- sqrt(rinvgamma(shape, scale))
+              current_sigma2 <- rinvgamma(shape, scale)
             } else {
               beta_tot <- c(beta)
               scale <- as.numeric(0.5 * crossprod(outcome_train$get_data()) + 0.5 * t(beta_tot) %*% Lambda_inv %*% beta_tot)
               shape <- (n + p_mod) / 2
-              current_sigma2 <- sqrt(rinvgamma(shape, scale)) #return here
+              current_sigma2 <- rinvgamma(shape, scale) #return here
             }
             global_model_config$update_global_error_variance(current_sigma2)
             if (keep_sample) global_var_samples[sample_counter] <- current_sigma2
@@ -1827,6 +1822,14 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
   if (internal_propensity_model) {
     result[["bart_propensity_model"]] = bart_model_propensity
   }
+  if(return_shapley){
+    if(verbose){
+      print('Calculating all shapley posteriors!')
+    }
+    shapley_all_df <- compute_shapley_all(X = X_train_raw, beta_post = beta_samples, beta_int_post = beta_int_samples, indices = NULL, boolean_interaction = as.logical(boolean_continuous))
+    result[["shapley_all_df"]] = shapley_all_df
+  }
+  
   class(result) <- "bcfmodel"
   
   return(result)
