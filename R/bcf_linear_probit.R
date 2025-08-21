@@ -1432,11 +1432,7 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           global_model_config = global_model_config, keep_forest = keep_sample, gfr = FALSE
         )
         
-        # Sample variance parameters (if requested)
-        if (sample_sigma2_global) {
-          current_sigma2 <- sampleGlobalErrorVarianceOneIteration(outcome_train, forest_dataset_train, rng, a_global, b_global)
-          global_model_config$update_global_error_variance(current_sigma2)
-        }
+        
         if (sample_sigma2_leaf_mu) {
           leaf_scale_mu_double <- sampleLeafVarianceOneIteration(active_forest_mu, rng, a_leaf_mu, b_leaf_mu)
           current_leaf_scale_mu <- as.matrix(leaf_scale_mu_double)
@@ -1461,12 +1457,12 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
               beta_tot <- c(beta, beta_int)
               scale <- as.numeric(0.5 * crossprod(outcome_train$get_data()) + 0.5 * t(beta_tot) %*% Lambda_inv %*% beta_tot)
               shape <- (n + p_mod + p_int) / 2
-              current_sigma2 <- sqrt(rinvgamma(shape, scale))
+              current_sigma2 <- rinvgamma(shape, scale)
             } else {
               beta_tot <- c(beta)
               scale <- as.numeric(0.5 * crossprod(outcome_train$get_data()) + 0.5 * t(beta_tot) %*% Lambda_inv %*% beta_tot)
               shape <- (n + p_mod) / 2
-              current_sigma2 <- sqrt(rinvgamma(shape, scale)) #return here
+              current_sigma2 <- rinvgamma(shape, scale)
             }
             global_model_config$update_global_error_variance(current_sigma2)
             
