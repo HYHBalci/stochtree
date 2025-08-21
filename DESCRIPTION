@@ -35,6 +35,9 @@ LinkingTo:
 SystemRequirements: C++17
 Imports: 
     R6,
-    stats
+    stats,
+    tibble,
+    tidyr,
+    dplyr
 URL: https://stochtree.ai/, https://github.com/StochasticTree/stochtree
 BugReports: https://github.com/StochasticTree/stochtree/issues

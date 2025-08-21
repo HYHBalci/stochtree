@@ -2,22 +2,26 @@
 % Please edit documentation in R/Shapley.R
 \name{shapley}
 \alias{shapley}
-\title{Shapley calculator for x_{i}}
+\title{Shapley Value Calculator for x_{i}}
 \usage{
-shapley(index, X, beta_post, beta_int_post)
+shapley(index, X, beta_post, beta_int_post, boolean_interaction)
 }
 \arguments{
-\item{index:}{row index in X for which to compute Shapley values}
+\item{index}{The row index in the data matrix \code{X} for which to compute Shapley values.}
 
-\item{X:}{centered covariate matrix (n x p)}
+\item{X}{A centered covariate matrix (n x p).}
 
-\item{beta_post:}{posterior samples of beta (chains x samples x p)}
+\item{beta_post}{Posterior samples of main effects (chains x samples x p).}
 
-\item{beta_int_post:}{posterior samples of interaction effects (chains x samples x p_int)}
+\item{beta_int_post}{Posterior samples of interaction effects (chains x samples x p_int).
+The dimension p_int must correspond to the number of pairs generated based on \code{boolean_interaction}.}
+
+\item{boolean_interaction}{A logical vector indicating which variables are allowed to have interactions.}
 }
 \value{
-The posterior samples of the shapley values, and a dataframe with summary statistics.
+A long-format tibble containing the posterior samples of the Shapley values.
 }
 \description{
-Shapley calculator.
+This function calculates Shapley values for a given observation, considering
+main effects and specified pairwise interaction effects.
 }

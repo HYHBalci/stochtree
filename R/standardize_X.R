@@ -66,8 +66,7 @@ standardize_X_by_index <- function(X_initial,
   
   # --- Main Logic Branch ---
   if (process_data) {
-    # --- PATH 1: PROCESS AND TRANSFORM DATA (Original Behavior) ---
-    
+
     # Step 1: Classify Original Columns and Prepare Intermediate Data
     all_cols_info <- lapply(1:ncol(X_df), function(j_idx) {
       col_data <- X_df[[j_idx]]
@@ -84,7 +83,7 @@ standardize_X_by_index <- function(X_initial,
           factor_col <- factor(col_data)
           processed_col_data <- ifelse(factor_col == levels(factor_col)[1], -1, 1)
           is_binary <- TRUE; should_include <- TRUE
-        } else if (is.character(col_data) || is.factor(col_data) || (is.numeric(col_data) && n_unique > 2 && n_unique < min(20, 0.2 * nrow(X_df)))) {
+        } else if (is.character(col_data) || is.factor(col_data) || (is.numeric(col_data) && n_unique > 2 && n_unique < 4)) {
           col_as_factor <- factor(col_data)
           if (nlevels(col_as_factor) > 1) {
             contrasts(col_as_factor) <- if (cat_coding_method == "difference") MASS::contr.sdif(nlevels(col_as_factor)) else contr.sum(nlevels(col_as_factor))
@@ -145,12 +144,10 @@ standardize_X_by_index <- function(X_initial,
     non_continous_idx_cpp <- which(!original_var_is_continuous) - 1
     
   } else {
-    # --- PATH 2: BYPASS TRANSFORMATION ---
-    
+
     # X_final is just the original matrix
     X_final <- as.matrix(X_df)
     
-    # Still need to classify columns to generate metadata
     all_cols_info <- lapply(1:ncol(X_df), function(j_idx) {
       col_data <- X_df[[j_idx]]
       n_unique <- length(unique(col_data[!is.na(col_data)]))
