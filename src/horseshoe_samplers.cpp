@@ -236,7 +236,7 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     const cpp11::doubles& Z,
     const cpp11::doubles& propensity_train,
     cpp11::writable::doubles residual,
-    const cpp11::integers& are_continuous,
+    const cpp11::r_vector<int>& are_continuous,
     double alpha,
     cpp11::writable::doubles beta,
     double gamma,
@@ -574,7 +574,7 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
 
 Eigen::VectorXd calculate_component_fit(
     const doubles_matrix<>& X, const Eigen::VectorXd& moderator, const doubles& beta,
-    const doubles& beta_int, const integers& are_continuous, double alpha, bool propensity_seperate,
+    const doubles& beta_int, const cpp11::r_vector<int>& are_continuous, double alpha, bool propensity_seperate,
     double gamma, const doubles& propensity_scores_r) {
   int n = X.nrow();
   int p_mod = X.ncol();
@@ -607,201 +607,202 @@ Eigen::VectorXd calculate_component_fit(
   }
   return fit; 
 }
-
-cpp11::list run_mcmc_sampler_2(
-    const cpp11::matrix<cpp11::r_vector<double>, cpp11::by_column>& X_r,
-    const cpp11::r_vector<double>& Y_r,
-    const cpp11::r_vector<double>& Z_r,
-    const cpp11::integers& are_continuous_r, // This type is already read-only
-    const cpp11::r_vector<double>& propensity_scores_r,
-    int num_iterations, int burn_in,
-    bool mu_gibbs, bool mu_global_shrink, bool mu_unlink, int mu_p_int,
-    bool tau_gibbs, bool tau_global_shrink, bool tau_unlink, int tau_p_int,
-    bool propensity_separate = false, double alpha_prior_sd = 10.0,
-    double sigma_init = 1.0,
-    double alpha_mu_init = 0.0, double alpha_tau_init = 0.0,
-    const cpp11::r_vector<double>& beta_mu_init = {}, const cpp11::r_vector<double>& beta_int_mu_init = {},
-    const cpp11::r_vector<double>& beta_tau_init = {}, const cpp11::r_vector<double>& beta_int_tau_init = {},
-    double tau_glob_mu_init = 1.0, double tau_glob_tau_init = 1.0
-){
-  
-  int n = Y_r.size();
-  int p_mod = X_r.ncol();
-  
-  // --- DATA PREPARATION: Standardize Y ---
-  writable::doubles Y_standardized_r(n);
-  double y_mean = 0.0;
-  for(double val : Y_r) { y_mean += val; }
-  y_mean /= n;
-  
-  double y_sd = 0.0;
-  for(double val : Y_r) { y_sd += (val - y_mean) * (val - y_mean); }
-  y_sd = std::sqrt(y_sd / (n - 1));
-  if (y_sd < 1e-6) y_sd = 1.0;
-  
-  for(int i = 0; i < n; ++i) { Y_standardized_r[i] = (Y_r[i] - y_mean) / y_sd; }
-  
-  // --- INITIALIZE PARAMETERS ---
-  writable::doubles beta_mu(beta_mu_init);
-  writable::doubles beta_int_mu(beta_int_mu_init);
-  writable::doubles tau_beta_mu(p_mod + mu_p_int); std::fill(tau_beta_mu.begin(), tau_beta_mu.end(), 1.0);
-  writable::doubles nu_mu(p_mod + mu_p_int); std::fill(nu_mu.begin(), nu_mu.end(), 1.0);
-  double alpha_mu = alpha_mu_init, gamma_mu = 0.0, xi_mu = 1.0, tau_int_mu = 1.0, tau_glob_mu = tau_glob_mu_init;
-  
-  writable::doubles beta_tau(beta_tau_init);
-  writable::doubles beta_int_tau(beta_int_tau_init);
-  writable::doubles tau_beta_tau(p_mod + tau_p_int); std::fill(tau_beta_tau.begin(), tau_beta_tau.end(), 1.0);
-  writable::doubles nu_tau(p_mod + tau_p_int); std::fill(nu_tau.begin(), nu_tau.end(), 1.0);
-  double alpha_tau = alpha_tau_init, gamma_tau = 0.0, xi_tau = 1.0, tau_int_tau = 1.0, tau_glob_tau = tau_glob_tau_init;
-  
-  double sigma = sigma_init / y_sd; // Scale initial sigma
-  
-  writable::doubles ones(n); std::fill(ones.begin(), ones.end(), 1.0);
-  
-  // --- STORAGE FOR SAMPLES ---
-  std::vector<std::vector<double>> s_beta_mu, s_beta_int_mu, s_tau_beta_mu;
-  std::vector<double> s_alpha_mu, s_tau_glob_mu;
-  std::vector<std::vector<double>> s_beta_tau, s_beta_int_tau, s_tau_beta_tau;
-  std::vector<double> s_alpha_tau, s_tau_glob_tau;
-  std::vector<double> s_sigma;
-  
-  // --- MCMC LOOP ---
-  for (int iter = 0; iter < num_iterations; ++iter) {
-    if ((iter + 1) % 100 == 0) {
-      Rprintf("Iteration: %d / %d | Sigma: %.4f\n", iter + 1, num_iterations, sigma * y_sd);
-    }
-    
-    // 1. UPDATE MU(X)
-    Eigen::VectorXd tau_fit = calculate_component_fit(X_r, Eigen::Map<const Eigen::VectorXd>(REAL(Z_r), n), beta_tau, beta_int_tau, are_continuous_r, alpha_tau, false, gamma_tau, propensity_scores_r);
-    writable::doubles residual_for_mu(n);
-    for(int i=0; i<n; ++i) residual_for_mu[i] = Y_standardized_r[i] - tau_fit[i];
-    
-    writable::doubles mu_output = updateLinearTreatmentCpp_cpp(
-      X_r, ones, propensity_scores_r, residual_for_mu, are_continuous_r,
-      alpha_mu, beta_mu, gamma_mu, beta_int_mu, tau_beta_mu, nu_mu, xi_mu, tau_int_mu,
-      sigma, alpha_prior_sd, tau_glob_mu, mu_global_shrink, mu_unlink,
-      propensity_separate, mu_gibbs, false, iter, 50, 0.5);
-    
-    int offset = 0;
-    alpha_mu = mu_output[offset++];
-    tau_int_mu = mu_output[offset++];
-    tau_glob_mu = mu_output[offset++];
-    gamma_mu = mu_output[offset++];
-    xi_mu = mu_output[offset++];
-    for(int j=0; j<p_mod; ++j) { beta_mu[j] = mu_output[offset++]; }
-    for(int j=0; j<mu_p_int; ++j) { beta_int_mu[j] = mu_output[offset++]; }
-    for(int j=0; j<p_mod + mu_p_int; ++j) { tau_beta_mu[j] = mu_output[offset++]; }
-    for(int j=0; j<p_mod + mu_p_int; ++j) { nu_mu[j] = mu_output[offset++]; }
-    
-    // 2. UPDATE TAU(X)
-    Eigen::VectorXd mu_fit = calculate_component_fit(X_r, Eigen::Map<const Eigen::VectorXd>(REAL(ones), n), beta_mu, beta_int_mu, are_continuous_r, alpha_mu, propensity_separate, gamma_mu, propensity_scores_r);
-    writable::doubles residual_for_tau(n);
-    for(int i=0; i<n; ++i) residual_for_tau[i] = Y_standardized_r[i] - mu_fit[i];
-    
-    writable::doubles tau_output = updateLinearTreatmentCpp_cpp(
-      X_r, Z_r, propensity_scores_r, residual_for_tau, are_continuous_r,
-      alpha_tau, beta_tau, gamma_tau, beta_int_tau, tau_beta_tau, nu_tau, xi_tau, tau_int_tau,
-      sigma, alpha_prior_sd, tau_glob_tau, tau_global_shrink, tau_unlink,
-      false, tau_gibbs, false, iter, 50, 0.5);
-    
-    offset = 0;
-    alpha_tau = tau_output[offset++];
-    tau_int_tau = tau_output[offset++];
-    tau_glob_tau = tau_output[offset++];
-    gamma_tau = tau_output[offset++];
-    xi_tau = tau_output[offset++];
-    for(int j=0; j<p_mod; ++j) { beta_tau[j] = tau_output[offset++]; }
-    for(int j=0; j<tau_p_int; ++j) { beta_int_tau[j] = tau_output[offset++]; }
-    for(int j=0; j<p_mod + tau_p_int; ++j) { tau_beta_tau[j] = tau_output[offset++]; }
-    for(int j=0; j<p_mod + tau_p_int; ++j) { nu_tau[j] = tau_output[offset++]; }
-    
-    // 3. UPDATE SIGMA
-    Eigen::Map<const Eigen::VectorXd> Y_standardized_map_const(REAL(Y_standardized_r), n);
-    Eigen::VectorXd final_residual = Y_standardized_map_const - mu_fit - tau_fit;
-    if (final_residual.hasNaN()) stop("NaN generated in final_residual at iteration %d", iter + 1);
-    
-    double shape, rate;
-    bool any_gibbs = mu_gibbs || tau_gibbs;
-    
-    if (any_gibbs) {
-      shape = (double)n / 2.0;
-      rate = final_residual.squaredNorm() / 2.0;
-    } else {
-      double sum_scaled_sq_betas = 0.0;
-      for(int j=0; j<p_mod; ++j) {
-        sum_scaled_sq_betas += (beta_mu[j] * beta_mu[j]) / safe_var(tau_beta_mu[j] * tau_beta_mu[j] * tau_glob_mu * tau_glob_mu);
-      }
-      for(int j=0; j<p_mod; ++j) {
-        sum_scaled_sq_betas += (beta_tau[j] * beta_tau[j]) / safe_var(tau_beta_tau[j] * tau_beta_tau[j] * tau_glob_tau * tau_glob_tau);
-      }
-      int total_p = p_mod * 2; // Simplified for now
-      shape = (double)(n + total_p) / 2.0;
-      rate = 0.5 * (final_residual.squaredNorm() + sum_scaled_sq_betas);
-    }
-    
-    sigma = std::sqrt(rinvgamma(shape, rate));
-    if (is_invalid(sigma)) stop("NaN generated in sigma at iteration %d. Rate was %.4f", iter + 1, rate);
-    if (sigma < 1e-6) sigma = 1e-6;
-     
-    if (iter >= burn_in) {
-      s_alpha_mu.push_back((alpha_mu * y_sd) + y_mean);
-      std::vector<double> temp_beta_mu(p_mod);
-      for(int j=0; j<p_mod; ++j) temp_beta_mu[j] = beta_mu[j] * y_sd;
-      s_beta_mu.push_back(temp_beta_mu);
-      
-      if(mu_p_int > 0) {
-        std::vector<double> temp_beta_int_mu(mu_p_int);
-        for(int j=0; j<mu_p_int; ++j) temp_beta_int_mu[j] = beta_int_mu[j] * y_sd;
-        s_beta_int_mu.push_back(temp_beta_int_mu);
-      }
-      s_tau_beta_mu.push_back(std::vector<double>(tau_beta_mu.begin(), tau_beta_mu.end()));
-      s_tau_glob_mu.push_back(tau_glob_mu);
-      
-      s_alpha_tau.push_back(alpha_tau * y_sd);
-      std::vector<double> temp_beta_tau(p_mod);
-      for(int j=0; j<p_mod; ++j) temp_beta_tau[j] = beta_tau[j] * y_sd;
-      s_beta_tau.push_back(temp_beta_tau);
-      
-      if(tau_p_int > 0) {
-        std::vector<double> temp_beta_int_tau(tau_p_int);
-        for(int j=0; j<tau_p_int; ++j) temp_beta_int_tau[j] = beta_int_tau[j] * y_sd;
-        s_beta_int_tau.push_back(temp_beta_int_tau);
-      }
-      s_tau_beta_tau.push_back(std::vector<double>(tau_beta_tau.begin(), tau_beta_tau.end()));
-      s_tau_glob_tau.push_back(tau_glob_tau);
-      
-      s_sigma.push_back(sigma * y_sd);
-    }
-  }
-  
-  auto to_matrix = [](const std::vector<std::vector<double>>& vec) {
-    if (vec.empty() || vec[0].empty()) return writable::doubles_matrix<>(0, 0);
-    R_xlen_t n_rows = vec.size();
-    R_xlen_t n_cols = vec[0].size();
-    writable::doubles_matrix<> mat(n_rows, n_cols);
-    for (R_xlen_t i = 0; i < n_rows; ++i) {
-      for (R_xlen_t j = 0; j < n_cols; ++j) {
-        mat(i, j) = vec[i][j];
-      }
-    }
-    return mat;
-  };
-  
-  return writable::list({
-    "mu_samples"_nm = writable::list({
-      "alpha"_nm = writable::doubles(s_alpha_mu.begin(), s_alpha_mu.end()),
-        "beta"_nm = to_matrix(s_beta_mu),
-        "beta_int"_nm = to_matrix(s_beta_int_mu),
-        "tau_beta"_nm = to_matrix(s_tau_beta_mu),
-        "tau_glob"_nm = writable::doubles(s_tau_glob_mu.begin(), s_tau_glob_mu.end())
-    }),
-    "tau_samples"_nm = writable::list({
-      "alpha"_nm = writable::doubles(s_alpha_tau.begin(), s_alpha_tau.end()),
-        "beta"_nm = to_matrix(s_beta_tau),
-        "beta_int"_nm = to_matrix(s_beta_int_tau),
-        "tau_beta"_nm = to_matrix(s_tau_beta_tau),
-        "tau_glob"_nm = writable::doubles(s_tau_glob_tau.begin(), s_tau_glob_tau.end())
-    }),
-    "sigma_samples"_nm = writable::doubles(s_sigma.begin(), s_sigma.end())
-  });
-}
+// 
+// [[cpp11::register]]
+// cpp11::list run_mcmc_sampler_2(
+//     const cpp11::matrix<cpp11::r_vector<double>, cpp11::by_column>& X_r,
+//     const cpp11::r_vector<double>& Y_r,
+//     const cpp11::r_vector<double>& Z_r,
+//     const cpp11::r_vector<int>& are_continuous,
+//     const cpp11::r_vector<double>& propensity_scores_r,
+//     int num_iterations, int burn_in,
+//     bool mu_gibbs, bool mu_global_shrink, bool mu_unlink, int mu_p_int,
+//     bool tau_gibbs, bool tau_global_shrink, bool tau_unlink, int tau_p_int,
+//     bool propensity_separate = false, double alpha_prior_sd = 10.0,
+//     double sigma_init = 1.0,
+//     double alpha_mu_init = 0.0, double alpha_tau_init = 0.0,
+//     const cpp11::r_vector<double>& beta_mu_init = {}, const cpp11::r_vector<double>& beta_int_mu_init = {},
+//     const cpp11::r_vector<double>& beta_tau_init = {}, const cpp11::r_vector<double>& beta_int_tau_init = {},
+//     double tau_glob_mu_init = 1.0, double tau_glob_tau_init = 1.0
+// ){
+//   
+//   int n = Y_r.size();
+//   int p_mod = X_r.ncol();
+//   
+//   // --- DATA PREPARATION: Standardize Y ---
+//   writable::doubles Y_standardized_r(n);
+//   double y_mean = 0.0;
+//   for(double val : Y_r) { y_mean += val; }
+//   y_mean /= n;
+//   
+//   double y_sd = 0.0;
+//   for(double val : Y_r) { y_sd += (val - y_mean) * (val - y_mean); }
+//   y_sd = std::sqrt(y_sd / (n - 1));
+//   if (y_sd < 1e-6) y_sd = 1.0;
+//   
+//   for(int i = 0; i < n; ++i) { Y_standardized_r[i] = (Y_r[i] - y_mean) / y_sd; }
+//   
+//   // --- INITIALIZE PARAMETERS ---
+//   writable::doubles beta_mu(beta_mu_init);
+//   writable::doubles beta_int_mu(beta_int_mu_init);
+//   writable::doubles tau_beta_mu(p_mod + mu_p_int); std::fill(tau_beta_mu.begin(), tau_beta_mu.end(), 1.0);
+//   writable::doubles nu_mu(p_mod + mu_p_int); std::fill(nu_mu.begin(), nu_mu.end(), 1.0);
+//   double alpha_mu = alpha_mu_init, gamma_mu = 0.0, xi_mu = 1.0, tau_int_mu = 1.0, tau_glob_mu = tau_glob_mu_init;
+//   
+//   writable::doubles beta_tau(beta_tau_init);
+//   writable::doubles beta_int_tau(beta_int_tau_init);
+//   writable::doubles tau_beta_tau(p_mod + tau_p_int); std::fill(tau_beta_tau.begin(), tau_beta_tau.end(), 1.0);
+//   writable::doubles nu_tau(p_mod + tau_p_int); std::fill(nu_tau.begin(), nu_tau.end(), 1.0);
+//   double alpha_tau = alpha_tau_init, gamma_tau = 0.0, xi_tau = 1.0, tau_int_tau = 1.0, tau_glob_tau = tau_glob_tau_init;
+//   
+//   double sigma = sigma_init / y_sd; // Scale initial sigma
+//   
+//   writable::doubles ones(n); std::fill(ones.begin(), ones.end(), 1.0);
+//   
+//   // --- STORAGE FOR SAMPLES ---
+//   std::vector<std::vector<double>> s_beta_mu, s_beta_int_mu, s_tau_beta_mu;
+//   std::vector<double> s_alpha_mu, s_tau_glob_mu;
+//   std::vector<std::vector<double>> s_beta_tau, s_beta_int_tau, s_tau_beta_tau;
+//   std::vector<double> s_alpha_tau, s_tau_glob_tau;
+//   std::vector<double> s_sigma;
+//   
+//   // --- MCMC LOOP ---
+//   for (int iter = 0; iter < num_iterations; ++iter) {
+//     if ((iter + 1) % 100 == 0) {
+//       Rprintf("Iteration: %d / %d | Sigma: %.4f\n", iter + 1, num_iterations, sigma * y_sd);
+//     }
+//     
+//     // 1. UPDATE MU(X)
+//     Eigen::VectorXd tau_fit = calculate_component_fit(X_r, Eigen::Map<const Eigen::VectorXd>(REAL(Z_r), n), beta_tau, beta_int_tau, are_continuous, alpha_tau, false, gamma_tau, propensity_scores_r);
+//     writable::doubles residual_for_mu(n);
+//     for(int i=0; i<n; ++i) residual_for_mu[i] = Y_standardized_r[i] - tau_fit[i];
+//     
+//     writable::doubles mu_output = updateLinearTreatmentCpp_cpp(
+//       X_r, ones, propensity_scores_r, residual_for_mu, are_continuous,
+//       alpha_mu, beta_mu, gamma_mu, beta_int_mu, tau_beta_mu, nu_mu, xi_mu, tau_int_mu,
+//       sigma, alpha_prior_sd, tau_glob_mu, mu_global_shrink, mu_unlink,
+//       propensity_separate, mu_gibbs, false, iter, 50, 0.5);
+//     
+//     int offset = 0;
+//     alpha_mu = mu_output[offset++];
+//     tau_int_mu = mu_output[offset++];
+//     tau_glob_mu = mu_output[offset++];
+//     gamma_mu = mu_output[offset++];
+//     xi_mu = mu_output[offset++];
+//     for(int j=0; j<p_mod; ++j) { beta_mu[j] = mu_output[offset++]; }
+//     for(int j=0; j<mu_p_int; ++j) { beta_int_mu[j] = mu_output[offset++]; }
+//     for(int j=0; j<p_mod + mu_p_int; ++j) { tau_beta_mu[j] = mu_output[offset++]; }
+//     for(int j=0; j<p_mod + mu_p_int; ++j) { nu_mu[j] = mu_output[offset++]; }
+//     
+//     // 2. UPDATE TAU(X)
+//     Eigen::VectorXd mu_fit = calculate_component_fit(X_r, Eigen::Map<const Eigen::VectorXd>(REAL(ones), n), beta_mu, beta_int_mu, are_continuous, alpha_mu, propensity_separate, gamma_mu, propensity_scores_r);
+//     writable::doubles residual_for_tau(n);
+//     for(int i=0; i<n; ++i) residual_for_tau[i] = Y_standardized_r[i] - mu_fit[i];
+//     
+//     writable::doubles tau_output = updateLinearTreatmentCpp_cpp(
+//       X_r, Z_r, propensity_scores_r, residual_for_tau, are_continuous,
+//       alpha_tau, beta_tau, gamma_tau, beta_int_tau, tau_beta_tau, nu_tau, xi_tau, tau_int_tau,
+//       sigma, alpha_prior_sd, tau_glob_tau, tau_global_shrink, tau_unlink,
+//       false, tau_gibbs, false, iter, 50, 0.5);
+//     
+//     offset = 0;
+//     alpha_tau = tau_output[offset++];
+//     tau_int_tau = tau_output[offset++];
+//     tau_glob_tau = tau_output[offset++];
+//     gamma_tau = tau_output[offset++];
+//     xi_tau = tau_output[offset++];
+//     for(int j=0; j<p_mod; ++j) { beta_tau[j] = tau_output[offset++]; }
+//     for(int j=0; j<tau_p_int; ++j) { beta_int_tau[j] = tau_output[offset++]; }
+//     for(int j=0; j<p_mod + tau_p_int; ++j) { tau_beta_tau[j] = tau_output[offset++]; }
+//     for(int j=0; j<p_mod + tau_p_int; ++j) { nu_tau[j] = tau_output[offset++]; }
+//     
+//     // 3. UPDATE SIGMA
+//     Eigen::Map<const Eigen::VectorXd> Y_standardized_map_const(REAL(Y_standardized_r), n);
+//     Eigen::VectorXd final_residual = Y_standardized_map_const - mu_fit - tau_fit;
+//     if (final_residual.hasNaN()) stop("NaN generated in final_residual at iteration %d", iter + 1);
+//     
+//     double shape, rate;
+//     bool any_gibbs = mu_gibbs || tau_gibbs;
+//     
+//     if (any_gibbs) {
+//       shape = (double)n / 2.0;
+//       rate = final_residual.squaredNorm() / 2.0;
+//     } else {
+//       double sum_scaled_sq_betas = 0.0;
+//       for(int j=0; j<p_mod; ++j) {
+//         sum_scaled_sq_betas += (beta_mu[j] * beta_mu[j]) / safe_var(tau_beta_mu[j] * tau_beta_mu[j] * tau_glob_mu * tau_glob_mu);
+//       }
+//       for(int j=0; j<p_mod; ++j) {
+//         sum_scaled_sq_betas += (beta_tau[j] * beta_tau[j]) / safe_var(tau_beta_tau[j] * tau_beta_tau[j] * tau_glob_tau * tau_glob_tau);
+//       }
+//       int total_p = p_mod * 2; // Simplified for now
+//       shape = (double)(n + total_p) / 2.0;
+//       rate = 0.5 * (final_residual.squaredNorm() + sum_scaled_sq_betas);
+//     }
+//     
+//     sigma = std::sqrt(rinvgamma(shape, rate));
+//     if (is_invalid(sigma)) stop("NaN generated in sigma at iteration %d. Rate was %.4f", iter + 1, rate);
+//     if (sigma < 1e-6) sigma = 1e-6;
+//      
+//     if (iter >= burn_in) {
+//       s_alpha_mu.push_back((alpha_mu * y_sd) + y_mean);
+//       std::vector<double> temp_beta_mu(p_mod);
+//       for(int j=0; j<p_mod; ++j) temp_beta_mu[j] = beta_mu[j] * y_sd;
+//       s_beta_mu.push_back(temp_beta_mu);
+//       
+//       if(mu_p_int > 0) {
+//         std::vector<double> temp_beta_int_mu(mu_p_int);
+//         for(int j=0; j<mu_p_int; ++j) temp_beta_int_mu[j] = beta_int_mu[j] * y_sd;
+//         s_beta_int_mu.push_back(temp_beta_int_mu);
+//       }
+//       s_tau_beta_mu.push_back(std::vector<double>(tau_beta_mu.begin(), tau_beta_mu.end()));
+//       s_tau_glob_mu.push_back(tau_glob_mu);
+//       
+//       s_alpha_tau.push_back(alpha_tau * y_sd);
+//       std::vector<double> temp_beta_tau(p_mod);
+//       for(int j=0; j<p_mod; ++j) temp_beta_tau[j] = beta_tau[j] * y_sd;
+//       s_beta_tau.push_back(temp_beta_tau);
+//       
+//       if(tau_p_int > 0) {
+//         std::vector<double> temp_beta_int_tau(tau_p_int);
+//         for(int j=0; j<tau_p_int; ++j) temp_beta_int_tau[j] = beta_int_tau[j] * y_sd;
+//         s_beta_int_tau.push_back(temp_beta_int_tau);
+//       }
+//       s_tau_beta_tau.push_back(std::vector<double>(tau_beta_tau.begin(), tau_beta_tau.end()));
+//       s_tau_glob_tau.push_back(tau_glob_tau);
+//       
+//       s_sigma.push_back(sigma * y_sd);
+//     }
+//   }
+//   
+//   auto to_matrix = [](const std::vector<std::vector<double>>& vec) {
+//     if (vec.empty() || vec[0].empty()) return writable::doubles_matrix<>(0, 0);
+//     R_xlen_t n_rows = vec.size();
+//     R_xlen_t n_cols = vec[0].size();
+//     writable::doubles_matrix<> mat(n_rows, n_cols);
+//     for (R_xlen_t i = 0; i < n_rows; ++i) {
+//       for (R_xlen_t j = 0; j < n_cols; ++j) {
+//         mat(i, j) = vec[i][j];
+//       }
+//     }
+//     return mat;
+//   };
+//   
+//   return writable::list({
+//     "mu_samples"_nm = writable::list({
+//       "alpha"_nm = writable::doubles(s_alpha_mu.begin(), s_alpha_mu.end()),
+//         "beta"_nm = to_matrix(s_beta_mu),
+//         "beta_int"_nm = to_matrix(s_beta_int_mu),
+//         "tau_beta"_nm = to_matrix(s_tau_beta_mu),
+//         "tau_glob"_nm = writable::doubles(s_tau_glob_mu.begin(), s_tau_glob_mu.end())
+//     }),
+//     "tau_samples"_nm = writable::list({
+//       "alpha"_nm = writable::doubles(s_alpha_tau.begin(), s_alpha_tau.end()),
+//         "beta"_nm = to_matrix(s_beta_tau),
+//         "beta_int"_nm = to_matrix(s_beta_int_tau),
+//         "tau_beta"_nm = to_matrix(s_tau_beta_tau),
+//         "tau_glob"_nm = writable::doubles(s_tau_glob_tau.begin(), s_tau_glob_tau.end())
+//     }),
+//     "sigma_samples"_nm = writable::doubles(s_sigma.begin(), s_sigma.end())
+//   });
+// }
