@@ -199,8 +199,7 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
   beta_int <- rep(0, p_int) 
   p_mod <- ncol(X_train)
   n <- nrow(X_train)
-  # Initialize parameters
-  alpha <- 0  # Intercept
+  alpha <- 0 
   beta <- rep(0, p_mod)
   xi <- 1
   if (unlink) {
@@ -1449,27 +1448,27 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
         }
         # Sample variance parameters (if requested)
         if (sample_sigma_global) {
-          if(gibbs){
-            lambda_sq <- tau_beta^2  # assume 'lambda' is a vector of lambda_j
-            Lambda_inv <- diag(1 / lambda_sq)
-            if(unlink){
-              beta_tot <- c(beta, beta_int)
-              scale <- as.numeric(0.5 * crossprod(outcome_train$get_data()) + 0.5 * t(beta_tot) %*% Lambda_inv %*% beta_tot)
-              shape <- (n + p_mod + p_int) / 2
-              current_sigma2 <- rinvgamma(shape, scale)
-            } else {
-              beta_tot <- c(beta)
-              scale <- as.numeric(0.5 * crossprod(outcome_train$get_data()) + 0.5 * t(beta_tot) %*% Lambda_inv %*% beta_tot)
-              shape <- (n + p_mod) / 2
-              current_sigma2 <- rinvgamma(shape, scale)
-            }
-            global_model_config$update_global_error_variance(current_sigma2)
-            
-            
-          } else {
+          # if(gibbs){
+          #   lambda_sq <- tau_beta^2  # assume 'lambda' is a vector of lambda_j
+          #   Lambda_inv <- diag(1 / lambda_sq)
+          #   if(unlink){
+          #     beta_tot <- c(beta, beta_int)
+          #     scale <- as.numeric(0.5 * crossprod(outcome_train$get_data()) + 0.5 * t(beta_tot) %*% Lambda_inv %*% beta_tot)
+          #     shape <- (n + p_mod + p_int) / 2
+          #     current_sigma2 <- rinvgamma(shape, scale)
+          #   } else {
+          #     beta_tot <- c(beta)
+          #     scale <- as.numeric(0.5 * crossprod(outcome_train$get_data()) + 0.5 * t(beta_tot) %*% Lambda_inv %*% beta_tot)
+          #     shape <- (n + p_mod) / 2
+          #     current_sigma2 <- rinvgamma(shape, scale)
+          #   }
+          #   global_model_config$update_global_error_variance(current_sigma2)
+          #   
+          #   
+          # } else {
             current_sigma2 <- sampleGlobalErrorVarianceOneIteration(outcome_train, forest_dataset_train, rng, a_global, b_global)
             global_model_config$update_global_error_variance(current_sigma2)
-          }
+          
         }
         if (sample_sigma_leaf_mu) {
           leaf_scale_mu_double <- sampleLeafVarianceOneIteration(active_forest_mu, rng, a_leaf_mu, b_leaf_mu)
@@ -1603,29 +1602,29 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           )
         }
         if (sample_sigma_global) {
-          if(gibbs){
-            lambda_sq <- tau_beta^2  # assume 'lambda' is a vector of lambda_j
-            Lambda_inv <- diag(1 / lambda_sq)
-            if(unlink){
-              beta_tot <- c(beta, beta_int)
-              scale <- as.numeric(0.5 * crossprod(outcome_train$get_data()) + 0.5 * t(beta_tot) %*% Lambda_inv %*% beta_tot)
-              shape <- (n + p_mod + p_int) / 2
-              current_sigma2 <- sqrt(rinvgamma(shape, scale))
-            } else {
-              beta_tot <- c(beta)
-              scale <- as.numeric(0.5 * crossprod(outcome_train$get_data()) + 0.5 * t(beta_tot) %*% Lambda_inv %*% beta_tot)
-              shape <- (n + p_mod) / 2
-              current_sigma2 <- sqrt(rinvgamma(shape, scale)) #return here
-            }
-            global_model_config$update_global_error_variance(current_sigma2)
-            if (keep_sample) global_var_samples[sample_counter] <- current_sigma2
-            
-          } else {
+          # if(gibbs){
+          #   lambda_sq <- tau_beta^2  # assume 'lambda' is a vector of lambda_j
+          #   Lambda_inv <- diag(1 / lambda_sq)
+          #   if(unlink){
+          #     beta_tot <- c(beta, beta_int)
+          #     scale <- as.numeric(0.5 * crossprod(outcome_train$get_data()) + 0.5 * t(beta_tot) %*% Lambda_inv %*% beta_tot)
+          #     shape <- (n + p_mod + p_int) / 2
+          #     current_sigma2 <- rinvgamma(shape, scale)
+          #   } else {
+          #     beta_tot <- c(beta)
+          #     scale <- as.numeric(0.5 * crossprod(outcome_train$get_data()) + 0.5 * t(beta_tot) %*% Lambda_inv %*% beta_tot)
+          #     shape <- (n + p_mod) / 2
+          #     current_sigma2 <- rinvgamma(shape, scale)
+          #   }
+          #   global_model_config$update_global_error_variance(current_sigma2)
+          #   
+          #   
+          # } else {
             current_sigma2 <- sampleGlobalErrorVarianceOneIteration(outcome_train, forest_dataset_train, rng, a_global, b_global)
             global_model_config$update_global_error_variance(current_sigma2)
             if (keep_sample) global_var_samples[sample_counter] <- current_sigma2
-            
-          }
+          # } 
+          
         }
         # Sample random effects parameters (if requested)
         if (has_rfx) {

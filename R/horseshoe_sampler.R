@@ -23,7 +23,7 @@ get_initial_values <- function(X, y, z, p_int_mu, p_int_tau) {
   # Construct the formula for the joint model
   # This will estimate main effects for X (mu), a main effect for z (tau intercept),
   # and interactions X:z (tau slopes)
-  formula_str <- "y ~ z * (."
+  formula_str <- "y ~ z * (.)"
   # We remove y from the formula predictors
   formula_str <- sub("\\.", paste(colnames(model_data)[1:p], collapse = " + "), formula_str)
   formula <- stats::as.formula(formula_str)
@@ -73,8 +73,8 @@ get_initial_values <- function(X, y, z, p_int_mu, p_int_tau) {
     alpha_tau_init = alpha_tau_init,
     beta_tau_init = beta_tau_init,
     beta_int_tau_init = beta_int_tau_init,
-    tau_glob_mu_init = 0.1, # Start with strong shrinkage
-    tau_glob_tau_init = 0.1
+    tau_glob_mu_init = 1, # Start with strong shrinkage
+    tau_glob_tau_init = 1
   ))
 }
 
@@ -95,8 +95,9 @@ get_initial_values <- function(X, y, z, p_int_mu, p_int_tau) {
 #' @param tau_model A list of options for the tau(x) model component.
 #' @param propensity_separate (logical) Whether to separately model the propensity score.
 #' @param alpha_prior_sd (double) The standard deviation of the prior on the intercept terms.
-#' @param initial_values A list of starting values for the sampler. If NULL (default),
-#'   data-driven initial values will be generated.
+#' @param initial_values A list of starting values for the sampler. If NULL (default), data driven initiliaziion will be made. 
+#' @param standardize_cov test
+#' @param interaction_rule test
 #'
 #' @return A list object of class `stochtree_hs` containing the posterior samples for all model parameters.
 #' @export
@@ -106,7 +107,7 @@ horseshoe_sampler <- function(X, y, z,
                               tau_model = list(gibbs = TRUE, global_shrink = TRUE, unlink = FALSE, p_int = 0),
                               propensity_separate = FALSE,
                               alpha_prior_sd = 10.0,
-                              initial_values = NULL) {
+                              initial_values = NULL, standardize_cov = F, interaction_rule = "continuous_or_binary") {
   
   handled_data_list <- standardize_X_by_index(X, process_data = standardize_cov, interaction_rule = interaction_rule, cat_coding_method = "difference")
   
@@ -141,7 +142,7 @@ horseshoe_sampler <- function(X, y, z,
   }
   
   # 3. Call the C++ backend function with initial values
-  samples <- run_mcmc_sampler(
+  samples <- run_mcmc_sampler_2(
     X_r = X,
     Y_r = y,
     Z_r = z,
