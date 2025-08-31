@@ -159,14 +159,25 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
     treated_coding_init = 0.5, rfx_prior_var = NULL, 
     random_seed = -1, keep_burnin = FALSE, keep_gfr = FALSE, 
     keep_every = 1, num_chains = 1, verbose = T, global_shrinkage = F, unlink = F, 
-    propensity_seperate = F, step_out = 0.5, max_steps = 50, gibbs = F, save_output = F, probit_outcome_model = F , interaction_rule = "continuous", standardize_cov = F
+    propensity_seperate = F, step_out = 0.5, max_steps = 50, gibbs = F, save_output = F, probit_outcome_model = F , interaction_rule = "continuous", standardize_cov = F, simple_prior = F
   )
   general_params_updated <- preprocessParams(
     general_params_default, general_params
   )
   ####
+  rinvgamma <- function(shape, scale){
+    if (shape <= 0.0 || scale <= 0.0) {
+      stop("Shape and scale must be positive.");
+    }
+    
+    g = rgamma(1, shape, scale)
+    out = 1.0 / g
+    return(out)
+  }
+  ####
   unlink <- general_params_updated$unlink 
   gibbs <- general_params_updated$gibbs
+  simple_prior <- general_params_updated$simple_prior
   save_output <- general_params_updated$save_output
   interaction_rule <- general_params_updated$interaction_rule
   standardize_cov <- general_params_updated$standardize_cov
@@ -1111,6 +1122,11 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
       } else {
         Z_linear <- Z_train
       }
+      if(simple_prior){
+        sigma2_lin <- 1
+      } else {
+        sigma2_lin <- current_sigma2
+      }
       update_results <- updateLinearTreatmentCpp_cpp(
         X = X_train_raw,
         Z = Z_linear,
@@ -1125,7 +1141,7 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
         nu = nu,
         xi = xi,
         tau_int = tau_int,
-        sigma = current_sigma2,
+        sigma = sigma2_lin,
         alpha_prior_sd = 10.0,
         tau_glob = tau_glob,
         global_shrink = global_shrinkage,
@@ -1218,10 +1234,16 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
         )
       }
       if (sample_sigma2_global) {
-        current_sigma2 <- sampleGlobalErrorVarianceOneIteration(outcome_train, forest_dataset_train, rng, a_global, b_global)
-        if (keep_sample) global_var_samples[sample_counter] <- current_sigma2
+        shape_sigma_post <- 0.001 + n / 2
+        rate_sigma_post <- 0.001 + 0.5 * sum(outcome_train$get_data()^2)
+        sigma_sq <- rinvgamma(shape = shape_sigma_post, scale = rate_sigma_post)
+        current_sigma2 <- max(sigma_sq, 1e-9)
         global_model_config$update_global_error_variance(current_sigma2)
-      }
+        if (keep_sample) global_var_samples[sample_counter] <- current_sigma2
+        # current_sigma2 <- sampleGlobalErrorVarianceOneIteration(outcome_train, forest_dataset_train, rng, a_global, b_global)
+        # if (keep_sample) global_var_samples[sample_counter] <- current_sigma2
+        # global_model_config$update_global_error_variance(current_sigma2)
+      } ##SAMPLED
       if (sample_sigma2_leaf_tau) {
         leaf_scale_tau_double <- sampleLeafVarianceOneIteration(active_forest_tau, rng, a_leaf_tau, b_leaf_tau)
         current_leaf_scale_tau <- as.matrix(leaf_scale_tau_double)
@@ -1437,46 +1459,41 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           if (keep_sample) leaf_scale_mu_samples[sample_counter] <- leaf_scale_mu_double
           forest_model_config_mu$update_leaf_model_scale(current_leaf_scale_mu)
         }
-        rinvgamma <- function(shape, scale){
-          if (shape <= 0.0 || scale <= 0.0) {
-            stop("Shape and scale must be positive.");
-          }
-          
-          g = rgamma(1, shape, scale)
-          out = 1.0 / g
-          return(out)
-        }
         # Sample variance parameters (if requested)
-        if (sample_sigma_global) {
-          # if(gibbs){
-          #   lambda_sq <- tau_beta^2  # assume 'lambda' is a vector of lambda_j
-          #   Lambda_inv <- diag(1 / lambda_sq)
-          #   if(unlink){
-          #     beta_tot <- c(beta, beta_int)
-          #     scale <- as.numeric(0.5 * crossprod(outcome_train$get_data()) + 0.5 * t(beta_tot) %*% Lambda_inv %*% beta_tot)
-          #     shape <- (n + p_mod + p_int) / 2
-          #     current_sigma2 <- rinvgamma(shape, scale)
-          #   } else {
-          #     beta_tot <- c(beta)
-          #     scale <- as.numeric(0.5 * crossprod(outcome_train$get_data()) + 0.5 * t(beta_tot) %*% Lambda_inv %*% beta_tot)
-          #     shape <- (n + p_mod) / 2
-          #     current_sigma2 <- rinvgamma(shape, scale)
-          #   }
-          #   global_model_config$update_global_error_variance(current_sigma2)
-          #   
-          #   
-          # } else {
-            current_sigma2 <- sampleGlobalErrorVarianceOneIteration(outcome_train, forest_dataset_train, rng, a_global, b_global)
-            global_model_config$update_global_error_variance(current_sigma2)
-          
-        }
+        # if (sample_sigma_global) {
+        #   # if(gibbs){
+        #   #   lambda_sq <- tau_beta^2  # assume 'lambda' is a vector of lambda_j
+        #   #   Lambda_inv <- diag(1 / lambda_sq)
+        #   #   if(unlink){
+        #   #     beta_tot <- c(beta, beta_int)
+        #   #     scale <- as.numeric(0.5 * crossprod(outcome_train$get_data()) + 0.5 * t(beta_tot) %*% Lambda_inv %*% beta_tot)
+        #   #     shape <- (n + p_mod + p_int) / 2
+        #   #     current_sigma2 <- rinvgamma(shape, scale)
+        #   #   } else {
+        #   #     beta_tot <- c(beta)
+        #   #     scale <- as.numeric(0.5 * crossprod(outcome_train$get_data()) + 0.5 * t(beta_tot) %*% Lambda_inv %*% beta_tot)
+        #   #     shape <- (n + p_mod) / 2
+        #   #     current_sigma2 <- rinvgamma(shape, scale)
+        #   #   }
+        #   #   global_model_config$update_global_error_variance(current_sigma2)
+        #   #
+        #   #
+        #   # } else {
+        #     current_sigma2 <- sampleGlobalErrorVarianceOneIteration(outcome_train, forest_dataset_train, rng, a_global, b_global)
+        #     global_model_config$update_global_error_variance(current_sigma2)
+        # 
+        # }
         if (sample_sigma_leaf_mu) {
           leaf_scale_mu_double <- sampleLeafVarianceOneIteration(active_forest_mu, rng, a_leaf_mu, b_leaf_mu)
           current_leaf_scale_mu <- as.matrix(leaf_scale_mu_double)
           if (keep_sample) leaf_scale_mu_samples[sample_counter] <- leaf_scale_mu_double
           forest_model_config_mu$update_leaf_model_scale(current_leaf_scale_mu)
         }
-        
+        if(simple_prior){
+          sigma2_lin <- 1
+        } else {
+          sigma2_lin <- current_sigma2
+        }
         
         update_results <- updateLinearTreatmentCpp_cpp(
           X = X_train_raw,
@@ -1492,7 +1509,7 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           nu = nu,
           xi = xi,
           tau_int = tau_int,
-          sigma = current_sigma2,
+          sigma = sigma2_lin,
           alpha_prior_sd = 10.0,
           tau_glob = tau_glob,
           global_shrink = global_shrinkage,
@@ -1619,11 +1636,18 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           #   global_model_config$update_global_error_variance(current_sigma2)
           #   
           #   
-          # } else {
-            current_sigma2 <- sampleGlobalErrorVarianceOneIteration(outcome_train, forest_dataset_train, rng, a_global, b_global)
-            global_model_config$update_global_error_variance(current_sigma2)
-            if (keep_sample) global_var_samples[sample_counter] <- current_sigma2
-          # } 
+          # # } else {
+          #   current_sigma2 <- sampleGlobalErrorVarianceOneIteration(outcome_train, forest_dataset_train, rng, a_global, b_global)
+          #   global_model_config$update_global_error_variance(current_sigma2)
+          #   if (keep_sample) global_var_samples[sample_counter] <- current_sigma2
+          # # }
+          
+          shape_sigma_post <- 0.001 + n / 2
+          rate_sigma_post <- 0.001 + 0.5 * sum(outcome_train$get_data()^2)
+          sigma_sq <- rinvgamma(shape = shape_sigma_post, scale = rate_sigma_post)
+          current_sigma2 <- max(sigma_sq, 1e-9)
+          global_model_config$update_global_error_variance(current_sigma2)
+          if (keep_sample) global_var_samples[sample_counter] <- current_sigma2
           
         }
         # Sample random effects parameters (if requested)
