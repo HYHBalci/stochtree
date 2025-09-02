@@ -1,4 +1,4 @@
-generate_interaction_matrix <- function(X, X_final_var_info, interaction_rule) { # Add X_final_var_info to parameters
+generate_interaction_matrix <- function(X, X_final_var_info, interaction_rule, propensity_seperate = FALSE) { # Add X_final_var_info to parameters
   # Removed p_int and non_continous_idx_cpp from this function's parameters
   
   p_mod <- ncol(X)
@@ -18,6 +18,9 @@ generate_interaction_matrix <- function(X, X_final_var_info, interaction_rule) {
   if (p_mod > 1) {
     for (i in 1:(p_mod - 1)) {
       for (j in (i + 1):p_mod) {
+        if (propensity_seperate && (j == p_mod)) {
+          next 
+        }
         if (is_continuous_map_final_X[i] || is_continuous_map_final_X[j]) {
           interaction_cols_list[[col_idx_counter]] <- X[, i] * X[, j]
           int_pairs[[col_idx_counter]] <- c(i, j) # Store original X_final indices for naming
@@ -43,8 +46,8 @@ generate_interaction_matrix <- function(X, X_final_var_info, interaction_rule) {
   return(interaction_matrix)
 }
 
-predict_interaction_lm <- function(X, coef, X_final_var_info, interaction_rule) {
-  interaction_terms <- generate_interaction_matrix(X, X_final_var_info, interaction_rule)
+predict_interaction_lm <- function(X, coef, X_final_var_info, interaction_rule, propensity_seperate = FALSE) {
+  interaction_terms <- generate_interaction_matrix(X, X_final_var_info, interaction_rule, propensity_seperate)
   full_design_matrix <- as.matrix(cbind(1, X, interaction_terms))
   
   return(as.vector(full_design_matrix %*% coef))  

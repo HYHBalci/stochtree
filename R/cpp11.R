@@ -548,8 +548,8 @@ root_reset_active_forest_cpp <- function(active_forest) {
   invisible(.Call(`_stochtree_root_reset_active_forest_cpp`, active_forest))
 }
 
-updateLinearTreatmentCpp_cpp <- function(X, Z, propensity_train, residual, are_continuous, alpha, beta, gamma, beta_int, tau_beta, nu, xi, tau_int, sigma, alpha_prior_sd, tau_glob, global_shrink, unlink, propensity_seperate, gibbs, save_output, index, max_steps, step_out) {
-  .Call(`_stochtree_updateLinearTreatmentCpp_cpp`, X, Z, propensity_train, residual, are_continuous, alpha, beta, gamma, beta_int, tau_beta, nu, xi, tau_int, sigma, alpha_prior_sd, tau_glob, global_shrink, unlink, propensity_seperate, gibbs, save_output, index, max_steps, step_out)
+updateLinearTreatmentCpp_cpp <- function(X, Z, residual, are_continuous, alpha, beta, beta_int, tau_beta, nu, xi, tau_int, sigma, alpha_prior_sd, tau_glob, global_shrink, unlink, gibbs, save_output, index, max_steps, step_out, propensity_seperate) {
+  .Call(`_stochtree_updateLinearTreatmentCpp_cpp`, X, Z, residual, are_continuous, alpha, beta, beta_int, tau_beta, nu, xi, tau_int, sigma, alpha_prior_sd, tau_glob, global_shrink, unlink, gibbs, save_output, index, max_steps, step_out, propensity_seperate)
 }
 
 forest_container_get_max_leaf_index_cpp <- function(forest_container, forest_num) {

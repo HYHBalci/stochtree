@@ -49,7 +49,7 @@ double rinvgamma(double shape, double scale) {
 
 void save_output_vector_labeled(
     std::ofstream& outfile,
-    double alpha, double tau_int, double tau_glob, double gamma, double xi, double sigma,
+    double alpha, double tau_int, double tau_glob, double xi, double sigma,
     const cpp11::writable::doubles& beta, const cpp11::writable::doubles& beta_int,
     const cpp11::writable::doubles& tau_beta, const cpp11::writable::doubles& nu, int index) {
   if (!outfile.is_open()) return;
@@ -57,7 +57,6 @@ void save_output_vector_labeled(
   outfile << "alpha: " << alpha << "\n";
   outfile << "tau_int: " << tau_int << "\n";
   outfile << "tau_glob: " << tau_glob << "\n";
-  outfile << "gamma: " << gamma << "\n";
   outfile << "xi: " << xi << "\n";
   outfile << "sigma: " << sigma << "\n";
   
@@ -234,12 +233,10 @@ double loglikeTauInt(double tau_int, const std::vector<double>& beta_int, const 
 cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     const cpp11::doubles_matrix<>& X,
     const cpp11::doubles& Z,
-    const cpp11::doubles& propensity_train,
     cpp11::writable::doubles residual,
     const cpp11::r_vector<int>& are_continuous,
     double alpha,
     cpp11::writable::doubles beta,
-    double gamma,
     cpp11::writable::doubles beta_int,
     cpp11::writable::doubles tau_beta,
     cpp11::writable::doubles nu,
@@ -250,12 +247,12 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     double tau_glob = 1.0,
     bool global_shrink = false,
     bool unlink = false,
-    bool propensity_seperate = false,
     bool gibbs = false,
     bool save_output = true,
     int index = 1,
     int max_steps = 50,
-    double step_out = 0.5) {
+    double step_out = 0.5,
+    bool propensity_seperate = false) {
   
   // --- INITIAL SETUP ---
   int n = residual.size();
@@ -268,9 +265,10 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     int_pairs.reserve(p_int);
     for (int i = 0; i < p_mod; i++) {
       for (int j = i + 1; j < p_mod; j++) {
+        if(!((propensity_seperate) & ((i == (p_mod -1))| (j == (p_mod-1))))){
         if ((are_continuous[i] == 1) || (are_continuous[j] == 1)) {
           int_pairs.push_back(std::make_pair(i, j));
-        }
+        }}
       }
     }
   }
@@ -280,12 +278,6 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
   Eigen::Map<const Eigen::MatrixXd> X_map(REAL(X), n, p_mod);
   
   // --- GAMMA & ALPHA UPDATES (VECTORIZED) ---
-  if (propensity_seperate) {
-    Eigen::Map<const Eigen::VectorXd> propensity_map(REAL(propensity_train), n);
-    residual_map += propensity_map * gamma;
-    gamma = sample_alpha_cpp(residual, propensity_train, sigma, alpha_prior_sd);
-    residual_map -= propensity_map * gamma;
-  }
   residual_map += Z_map * alpha;
   alpha = sample_alpha_cpp(residual, Z, sigma, alpha_prior_sd);
   residual_map -= Z_map * alpha;
@@ -330,10 +322,8 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     
     // --- ALGORITHM CHOICE ---
     if (use_bhatt_sampler) {
-      // --- CORRECTED Bhattacharya et al. (2016) Algorithm for p >= n ---
       // This samples from the posterior of beta ~ N(0, sigma^2 * D)
       
-      // Step A: Form X_combined matrix
       Eigen::MatrixXd X_combined(n, P_combined);
       for (int j = 0; j < p_mod; ++j) X_combined.col(j) = Z_map.array() * X_map.col(j).array();
       for (size_t k = 0; k < int_pairs.size(); ++k) X_combined.col(p_mod + k) = Z_map.array() * X_map.col(int_pairs[k].first).array() * X_map.col(int_pairs[k].second).array();
@@ -357,10 +347,8 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
       Eigen::LLT<Eigen::MatrixXd> lltOfM(M_solve);
       if (lltOfM.info() != Eigen::Success) {
         cpp11::warning("Cholesky of n x n system failed in fast sampler. Betas not updated.");
-        // Keep beta_combined_new_eigen as its old values (by not updating beta/beta_int)
       } else {
         Eigen::VectorXd w = lltOfM.solve(y_target_scaled - v);
-        // Step F: Compute scaled-down sample and scale back up by sigma
         Eigen::VectorXd beta_tilde_new = u + D_mat * X_combined.transpose() * w;
         beta_combined_new_eigen = sigma * beta_tilde_new;
       }
@@ -392,24 +380,15 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
         Eigen::MatrixXd L_chol = lltOfA.matrixL();
         Eigen::VectorXd std_normal_draws(P_combined);
         for (int k = 0; k < P_combined; ++k) std_normal_draws(k) = Rf_rnorm(0.0, 1.0);
-        
-        // --- THIS IS THE CORRECTED PART ---
-        // To sample from N(mean, sigma^2 * (L*L')^-1), we compute: 
-        // mean + sigma * (L')^-1 * z, where z ~ N(0,I)
-        // We solve for x in L' * x = z, which is what L_chol.transpose().solve(...) does.
         Eigen::VectorXd solved_part = L_chol.transpose().template triangularView<Eigen::Upper>().solve(std_normal_draws);
         beta_combined_new_eigen = post_mean_beta_eigen + sigma * solved_part;
-        // --- END OF CORRECTION ---
-        
+
       } else {
         cpp11::warning("Cholesky decomposition failed in standard Gibbs sampler. Betas not updated.");
-        // If Cholesky fails, we should not update the coefficients.
-        // Copy old values into the new vector so the unpacking step uses the old values.
         for(int j=0; j<p_mod; ++j) beta_combined_new_eigen(j) = beta[j];
         for(int k=0; k<p_int; ++k) beta_combined_new_eigen(p_mod + k) = beta_int[k];
       }
       
-      // Unpack coefficients AFTER the if/else block to handle both cases
       for(int j=0; j<p_mod; ++j) beta[j] = beta_combined_new_eigen(j);
       for(int k=0; k<p_int; ++k) beta_int[k] = beta_combined_new_eigen(p_mod + k);
     }
@@ -452,7 +431,6 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     Eigen::Map<Eigen::VectorXd> beta_map(REAL(beta), p_mod);
     Eigen::Map<Eigen::VectorXd> beta_int_map(REAL(beta_int), p_int);
     
-    // 1. Construct target variable y* = residual + old_fit
     Eigen::VectorXd y_target = residual_map;
     for (int j = 0; j < p_mod; ++j) {
       y_target.array() += Z_map.array() * X_map.col(j).array() * beta_map(j);
@@ -461,13 +439,11 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
       y_target.array() += Z_map.array() * X_map.col(int_pairs[k].first).array() * X_map.col(int_pairs[k].second).array() * beta_int_map(k);
     } 
     
-    // 2. Define prior variance D (excluding sigma^2), with tau_int = 1.0
     Eigen::VectorXd D_diag(P_combined);
     for (int j = 0; j < p_mod; ++j) {
       D_diag(j) = safe_var(tau_beta[j] * tau_beta[j] * tau_glob * tau_glob);
     } 
     for (size_t k = 0; k < int_pairs.size(); ++k) {
-      // For linked interactions, tau_int is now treated as 1.0
       double V_k_star = unlink ?
       (tau_beta[p_mod + k] * tau_beta[p_mod + k] * tau_glob * tau_glob) : 
       (1.0 * tau_beta[int_pairs[k].first] * tau_beta[int_pairs[k].second] * tau_glob * tau_glob);
@@ -477,7 +453,7 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     // 3. Block sample all beta coefficients
     Eigen::VectorXd beta_combined_new_eigen(P_combined);
      
-    // Step A: Calculate XtX and Xt_y on the fly
+    // Step A: Calculate XtX and Xt_y 
     Eigen::MatrixXd XtX = Eigen::MatrixXd::Zero(P_combined, P_combined);
     Eigen::VectorXd Xt_y = Eigen::VectorXd::Zero(P_combined);
     for (int i = 0; i < n; ++i) {
@@ -546,13 +522,12 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     tau_int = 1.0; 
   } 
   // --- CONSOLIDATE AND RETURN RESULTS ---
-  size_t total_size = 5 + beta.size() + beta_int.size() + tau_beta.size() + nu.size() + residual.size();
+  size_t total_size = 4 + beta.size() + beta_int.size() + tau_beta.size() + nu.size() + residual.size();
   cpp11::writable::doubles output;
   output.reserve(total_size);
   output.push_back(alpha);
   output.push_back(tau_int);
   output.push_back(tau_glob);
-  output.push_back(gamma);
   output.push_back(xi);
   for (double val : beta) output.push_back(val);
   for (double val : beta_int) output.push_back(val);
@@ -562,7 +537,7 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
   
   if (save_output) {
     std::ofstream outfile("output_log.txt", std::ios::app);
-    save_output_vector_labeled(outfile, alpha, tau_int, tau_glob, gamma, xi, sigma, beta, beta_int, tau_beta, nu, index);
+    save_output_vector_labeled(outfile, alpha, tau_int, tau_glob, xi, sigma, beta, beta_int, tau_beta, nu, index);
     outfile.close();
   }
   return output;
@@ -574,8 +549,7 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
 
 Eigen::VectorXd calculate_component_fit(
     const doubles_matrix<>& X, const Eigen::VectorXd& moderator, const doubles& beta,
-    const doubles& beta_int, const cpp11::r_vector<int>& are_continuous, double alpha, bool propensity_seperate,
-    double gamma, const doubles& propensity_scores_r) {
+    const doubles& beta_int, const cpp11::r_vector<int>& are_continuous, double alpha) {
   int n = X.nrow();
   int p_mod = X.ncol();
   Eigen::Map<const Eigen::MatrixXd> X_map(REAL(X), n, p_mod);
@@ -601,10 +575,7 @@ Eigen::VectorXd calculate_component_fit(
     }
   }
   fit.array() += moderator.array() * alpha;
-  if(propensity_seperate){
-    Eigen::Map<const Eigen::VectorXd> propensity_scores(REAL(propensity_scores_r), n);
-    fit.array() += moderator.array()*propensity_scores.array()*gamma;
-  }
+
   return fit; 
 }
 // 
