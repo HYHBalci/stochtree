@@ -233,9 +233,11 @@ double loglikeTauInt(double tau_int, const std::vector<double>& beta_int, const 
 cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     const cpp11::doubles_matrix<>& X,
     const cpp11::doubles& Z,
+    const cpp11::doubles& propensity_train, 
     cpp11::writable::doubles residual,
     const cpp11::r_vector<int>& are_continuous,
     double alpha,
+    double gamma, // propensity coefficient. 
     cpp11::writable::doubles beta,
     cpp11::writable::doubles beta_int,
     cpp11::writable::doubles tau_beta,
@@ -252,7 +254,7 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     int index = 1,
     int max_steps = 50,
     double step_out = 0.5,
-    bool propensity_seperate = false) {
+    const std::string& propensity_seperate = "none" ) {    // propensity_seperate "none" for nothing changed from the original setup, "mu" to take it outside of tau(X) and "tau" to put it in tau(X).
   
   // --- INITIAL SETUP ---
   int n = residual.size();
@@ -265,7 +267,7 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     int_pairs.reserve(p_int);
     for (int i = 0; i < p_mod; i++) {
       for (int j = i + 1; j < p_mod; j++) {
-        if(!((propensity_seperate) & ((i == (p_mod -1))| (j == (p_mod-1))))){
+        if(!((propensity_seperate == "tau") & ((i == (p_mod -1))| (j == (p_mod-1))))){
         if ((are_continuous[i] == 1) || (are_continuous[j] == 1)) {
           int_pairs.push_back(std::make_pair(i, j));
         }}
@@ -278,6 +280,14 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
   Eigen::Map<const Eigen::MatrixXd> X_map(REAL(X), n, p_mod);
   
   // --- GAMMA & ALPHA UPDATES (VECTORIZED) ---
+  
+  if (propensity_seperate == "mu") {
+    Eigen::Map<const Eigen::VectorXd> propensity_map(REAL(propensity_train), n);
+    residual_map += propensity_map * gamma;
+    gamma = sample_alpha_cpp(residual, propensity_train, sigma, 10);
+    residual_map -= propensity_map * gamma;
+  }
+  
   residual_map += Z_map * alpha;
   alpha = sample_alpha_cpp(residual, Z, sigma, alpha_prior_sd);
   residual_map -= Z_map * alpha;
@@ -522,12 +532,13 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     tau_int = 1.0; 
   } 
   // --- CONSOLIDATE AND RETURN RESULTS ---
-  size_t total_size = 4 + beta.size() + beta_int.size() + tau_beta.size() + nu.size() + residual.size();
+  size_t total_size = 5 + beta.size() + beta_int.size() + tau_beta.size() + nu.size() + residual.size();
   cpp11::writable::doubles output;
   output.reserve(total_size);
   output.push_back(alpha);
   output.push_back(tau_int);
   output.push_back(tau_glob);
+  output.push_back(gamma);
   output.push_back(xi);
   for (double val : beta) output.push_back(val);
   for (double val : beta_int) output.push_back(val);
