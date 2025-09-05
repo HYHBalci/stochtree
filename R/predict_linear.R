@@ -18,7 +18,7 @@ generate_interaction_matrix <- function(X, X_final_var_info, interaction_rule, p
   if (p_mod > 1) {
     for (i in 1:(p_mod - 1)) {
       for (j in (i + 1):p_mod) {
-        if (propensity_seperate && (j == p_mod)) {
+        if ((propensity_seperate == "tau") && (j == p_mod)) {
           next 
         }
         if (is_continuous_map_final_X[i] || is_continuous_map_final_X[j]) {
@@ -46,7 +46,7 @@ generate_interaction_matrix <- function(X, X_final_var_info, interaction_rule, p
   return(interaction_matrix)
 }
 
-predict_interaction_lm <- function(X, coef, X_final_var_info, interaction_rule, propensity_seperate = FALSE) {
+predict_interaction_lm <- function(X, coef, X_final_var_info, interaction_rule, propensity_seperate = "none") {
   interaction_terms <- generate_interaction_matrix(X, X_final_var_info, interaction_rule, propensity_seperate)
   full_design_matrix <- as.matrix(cbind(1, X, interaction_terms))
   

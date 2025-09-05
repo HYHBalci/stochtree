@@ -38,7 +38,8 @@ double sample_sigma2_ig_cpp(int N, cpp11::writable::doubles resid,
 
 cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     cpp11::doubles_matrix<> X,
-    cpp11::doubles Z,    
+    cpp11::doubles Z,  
+    const cpp11::doubles& propensity_train, 
     cpp11::writable::doubles residual,
     double alpha,
     cpp11::writable::doubles beta,  
@@ -57,7 +58,7 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     int index = 1,
     int max_steps = 50,
     double step_out = 0.5,
-    bool propensity_seperate = false
+    const std::string& propensity_seperate = "none"
 );
 
 // cpp11::list run_mcmc_sampler_2(
