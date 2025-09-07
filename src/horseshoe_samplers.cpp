@@ -233,11 +233,11 @@ double loglikeTauInt(double tau_int, const std::vector<double>& beta_int, const 
 cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     const cpp11::doubles_matrix<>& X,
     const cpp11::doubles& Z,
-    const cpp11::doubles& propensity_train, 
+    const cpp11::doubles& propensity_train,
     cpp11::writable::doubles residual,
     const cpp11::r_vector<int>& are_continuous,
     double alpha,
-    double gamma, // propensity coefficient. 
+    double gamma, // propensity coefficient.
     cpp11::writable::doubles beta,
     cpp11::writable::doubles beta_int,
     cpp11::writable::doubles tau_beta,
@@ -254,7 +254,8 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     int index = 1,
     int max_steps = 50,
     double step_out = 0.5,
-    const std::string& propensity_seperate = "none" ) {    // propensity_seperate "none" for nothing changed from the original setup, "mu" to take it outside of tau(X) and "tau" to put it in tau(X).
+    const std::string& propensity_seperate = "none",
+    bool regularize_ATE = false) {
   
   // --- INITIAL SETUP ---
   int n = residual.size();
@@ -268,9 +269,10 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     for (int i = 0; i < p_mod; i++) {
       for (int j = i + 1; j < p_mod; j++) {
         if(!((propensity_seperate == "tau") & ((i == (p_mod -1))| (j == (p_mod-1))))){
-        if ((are_continuous[i] == 1) || (are_continuous[j] == 1)) {
-          int_pairs.push_back(std::make_pair(i, j));
-        }}
+          if ((are_continuous[i] == 1) || (are_continuous[j] == 1)) {
+            int_pairs.push_back(std::make_pair(i, j));
+          }
+        }
       }
     }
   }
@@ -287,43 +289,45 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     gamma = sample_alpha_cpp(residual, propensity_train, sigma, 10);
     residual_map -= propensity_map * gamma;
   }
-  
-  residual_map += Z_map * alpha;
-  alpha = sample_alpha_cpp(residual, Z, sigma, alpha_prior_sd);
-  residual_map -= Z_map * alpha;
+  if (!regularize_ATE){
+    residual_map += Z_map * alpha;
+    alpha = sample_alpha_cpp(residual, Z, sigma, alpha_prior_sd);
+    residual_map -= Z_map * alpha;
+  }
   
   // --- BETA & TAU UPDATES ---
-  if (gibbs) { 
-    int P_combined = p_mod + p_int;
+  if (gibbs) {
+    int P_combined = p_mod + p_int + regularize_ATE; // Total number of regularized coefficients
     
     // Choose the most efficient algorithm based on problem dimensions
     bool use_bhatt_sampler = P_combined >= n;
     
     // Use Eigen::Map for efficient access to R vectors
-    Eigen::Map<Eigen::VectorXd> residual_map(REAL(residual), n);
-    Eigen::Map<const Eigen::MatrixXd> X_map(REAL(X), n, p_mod);
     Eigen::Map<Eigen::VectorXd> beta_map(REAL(beta), p_mod);
     Eigen::Map<Eigen::VectorXd> beta_int_map(REAL(beta_int), p_int);
     
     // 1. Construct target variable y* = residual + old_fit
     Eigen::VectorXd y_target = residual_map;
+    if(regularize_ATE){
+      y_target.array() += Z_map.array() * alpha;
+    }
     for (int j = 0; j < p_mod; ++j) {
       y_target.array() += Z_map.array() * X_map.col(j).array() * beta_map(j);
-    } 
+    }
     for (size_t k = 0; k < int_pairs.size(); ++k) {
       y_target.array() += Z_map.array() * X_map.col(int_pairs[k].first).array() * X_map.col(int_pairs[k].second).array() * beta_int_map(k);
     }
     
     // 2. Define prior variance matrix D (excluding sigma^2)
     Eigen::VectorXd D_diag(P_combined);
-    for (int j = 0; j < p_mod; ++j) {
+    for (int j = 0; j < p_mod + regularize_ATE; ++j) {
       D_diag(j) = safe_var(tau_beta[j] * tau_beta[j] * tau_glob * tau_glob);
-    } 
+    }
     for (size_t k = 0; k < int_pairs.size(); ++k) {
       double V_k_star = unlink ?
-      (tau_beta[p_mod + k] * tau_beta[p_mod + k] * tau_glob * tau_glob) :
-      (tau_int * tau_beta[int_pairs[k].first] * tau_beta[int_pairs[k].second] * tau_glob * tau_glob);
-      D_diag(p_mod + k) = safe_var(V_k_star);
+      (tau_beta[p_mod + regularize_ATE + k] * tau_beta[p_mod + regularize_ATE + k] * tau_glob * tau_glob) :
+      (tau_int * tau_beta[int_pairs[k].first + regularize_ATE] * tau_beta[int_pairs[k].second + regularize_ATE] * tau_glob * tau_glob);
+      D_diag(p_mod + regularize_ATE + k) = safe_var(V_k_star);
     }
     Eigen::MatrixXd D_mat = D_diag.asDiagonal();
     
@@ -332,45 +336,66 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     
     // --- ALGORITHM CHOICE ---
     if (use_bhatt_sampler) {
-      // This samples from the posterior of beta ~ N(0, sigma^2 * D)
+      // Bhattacharya sampler (for p > n)
       
+      // Construct combined design matrix X_combined (n x P_combined)
       Eigen::MatrixXd X_combined(n, P_combined);
-      for (int j = 0; j < p_mod; ++j) X_combined.col(j) = Z_map.array() * X_map.col(j).array();
-      for (size_t k = 0; k < int_pairs.size(); ++k) X_combined.col(p_mod + k) = Z_map.array() * X_map.col(int_pairs[k].first).array() * X_map.col(int_pairs[k].second).array();
+      if(regularize_ATE){
+        // FIX: The covariate for alpha is Z itself, not Z*alpha.
+        X_combined.col(0) = Z_map;
+      }
+      for (int j = 0; j < p_mod; ++j) {
+        X_combined.col(j + regularize_ATE) = Z_map.array() * X_map.col(j).array();
+      }
+      for (size_t k = 0; k < int_pairs.size(); ++k) {
+        X_combined.col(p_mod + regularize_ATE + k) = Z_map.array() * X_map.col(int_pairs[k].first).array() * X_map.col(int_pairs[k].second).array();
+      }
       
-      // Step B: Rescale the model for a sigma=1 sampler
-      Eigen::VectorXd y_target_scaled = y_target / sigma;
-      
-      // Step C: Draw u from N(0, D) and delta from N(0, I_n)
       Eigen::VectorXd u(P_combined);
-      for (int j = 0; j < P_combined; ++j) u(j) = Rf_rnorm(0.0, sqrt(D_diag(j)));
+      for (int j = 0; j < P_combined; ++j) u(j) = Rf_rnorm(0.0, std::sqrt(D_diag(j)));
       Eigen::VectorXd delta(n);
       for (int i = 0; i < n; ++i) delta(i) = Rf_rnorm(0.0, 1.0);
       
-      // Step D: Compute v = X*u + delta
       Eigen::VectorXd v = X_combined * u + delta;
       
-      // Step E: Solve the n x n system (X*D*X^T + I_n) * w = y_target_scaled - v
       Eigen::MatrixXd M_solve = X_combined * D_mat * X_combined.transpose();
-      M_solve.diagonal().array() += 1.0; // Add I_n
+      M_solve.diagonal().array() += 1.0;
+      
+      // FIX: Define y_target_scaled = y_target / sigma. The variable was used without initialization.
+      Eigen::VectorXd y_target_scaled = y_target / sigma;
       
       Eigen::LLT<Eigen::MatrixXd> lltOfM(M_solve);
       if (lltOfM.info() != Eigen::Success) {
         cpp11::warning("Cholesky of n x n system failed in fast sampler. Betas not updated.");
+        beta_combined_new_eigen.setZero(); // Avoid using uninitialized memory
+        if(regularize_ATE) beta_combined_new_eigen(0) = alpha;
+        for(int j=0; j<p_mod; ++j) beta_combined_new_eigen(j + regularize_ATE) = beta[j];
+        for(int k=0; k<p_int; ++k) beta_combined_new_eigen(p_mod + regularize_ATE + k) = beta_int[k];
       } else {
         Eigen::VectorXd w = lltOfM.solve(y_target_scaled - v);
         Eigen::VectorXd beta_tilde_new = u + D_mat * X_combined.transpose() * w;
         beta_combined_new_eigen = sigma * beta_tilde_new;
       }
       
-    } else { 
+    } else {
+      // Standard Gibbs Sampler (for p < n)
+      
       // Step A: Calculate XtX and Xt_y on the fly
       Eigen::MatrixXd XtX = Eigen::MatrixXd::Zero(P_combined, P_combined);
       Eigen::VectorXd Xt_y = Eigen::VectorXd::Zero(P_combined);
       for (int i = 0; i < n; ++i) {
         Eigen::VectorXd x_row_combined(P_combined);
-        for (int j = 0; j < p_mod; ++j) x_row_combined(j) = Z_map(i) * X_map(i, j);
-        for (size_t k = 0; k < int_pairs.size(); ++k) x_row_combined(p_mod + k) = Z_map(i) * X_map(i, int_pairs[k].first) * X_map(i, int_pairs[k].second);
+        if(regularize_ATE){
+          // FIX: The covariate for alpha is Z(i), not Z(i)*alpha. Indexing fixed.
+          x_row_combined(0) = Z_map(i);
+        }
+        for (int j = 0; j < p_mod; ++j) {
+          // FIX: Simplified indexing: column index is j + regularize_ATE. Covariate index is j.
+          x_row_combined(j + regularize_ATE) = Z_map(i) * X_map(i, j);
+        }
+        for (size_t k = 0; k < int_pairs.size(); ++k) {
+          x_row_combined(p_mod + regularize_ATE + k) = Z_map(i) * X_map(i, int_pairs[k].first) * X_map(i, int_pairs[k].second);
+        }
         XtX.selfadjointView<Eigen::Lower>().rankUpdate(x_row_combined);
         Xt_y += x_row_combined * y_target(i);
       }
@@ -383,102 +408,147 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
       // Step C: Calculate posterior parameters and sample
       Eigen::LLT<Eigen::MatrixXd> lltOfA(Post_Prec_Unscaled);
       if (lltOfA.info() == Eigen::Success) {
-        // Posterior mean = (X'X + D^-1)^-1 * X'y
         Eigen::VectorXd post_mean_beta_eigen = lltOfA.solve(Xt_y);
-        
-        // Get the lower triangular Cholesky factor L, where L*L' = (X'X + D^-1)
         Eigen::MatrixXd L_chol = lltOfA.matrixL();
         Eigen::VectorXd std_normal_draws(P_combined);
         for (int k = 0; k < P_combined; ++k) std_normal_draws(k) = Rf_rnorm(0.0, 1.0);
         Eigen::VectorXd solved_part = L_chol.transpose().template triangularView<Eigen::Upper>().solve(std_normal_draws);
         beta_combined_new_eigen = post_mean_beta_eigen + sigma * solved_part;
-
+        
       } else {
         cpp11::warning("Cholesky decomposition failed in standard Gibbs sampler. Betas not updated.");
-        for(int j=0; j<p_mod; ++j) beta_combined_new_eigen(j) = beta[j];
-        for(int k=0; k<p_int; ++k) beta_combined_new_eigen(p_mod + k) = beta_int[k];
+        beta_combined_new_eigen.setZero(); // Avoid using uninitialized memory
+        if(regularize_ATE) beta_combined_new_eigen(0) = alpha;
+        for(int j=0; j<p_mod; ++j) beta_combined_new_eigen(j + regularize_ATE) = beta[j];
+        for(int k=0; k<p_int; ++k) beta_combined_new_eigen(p_mod + regularize_ATE + k) = beta_int[k];
       }
-      
+    }
+    
+    // 3. Unpack new coefficients from combined vector
+    if(regularize_ATE){
+      alpha = beta_combined_new_eigen(0);
+      for(int j=0; j<p_mod; ++j) beta[j] = beta_combined_new_eigen(j + 1);
+      for(int k=0; k<p_int; ++k) beta_int[k] = beta_combined_new_eigen(p_mod + 1 + k);
+    } else {
       for(int j=0; j<p_mod; ++j) beta[j] = beta_combined_new_eigen(j);
       for(int k=0; k<p_int; ++k) beta_int[k] = beta_combined_new_eigen(p_mod + k);
     }
-    // Recalculate residual based on new beta coefficients
+    
+    // 4. Recalculate residual based on new beta coefficients
     Eigen::VectorXd new_fit = Eigen::VectorXd::Zero(n);
+    if(regularize_ATE){
+      new_fit.array() += Z_map.array() * alpha;
+    }
     for (int j=0; j<p_mod; ++j) new_fit.array() += Z_map.array() * X_map.col(j).array() * beta[j];
     for (size_t k = 0; k < int_pairs.size(); ++k) new_fit.array() += Z_map.array() * X_map.col(int_pairs[k].first).array() * X_map.col(int_pairs[k].second).array() * beta_int[k];
     residual_map = y_target - new_fit;
-    // 5. Sample local and global shrinkage parameters
-    for(int j = 0; j < p_mod; j++){
+    
+    // 5. Sample local shrinkage parameters tau_beta (and nu)
+    for(int j = 0; j < p_mod + regularize_ATE; j++){
+      // FIX: Select correct coefficient for update. If regularize_ATE=true, index j=0 corresponds to alpha, index j=1 corresponds to beta[0], etc.
+      double current_coeff;
+      if (regularize_ATE) {
+        current_coeff = (j == 0) ? alpha : beta[j - 1];
+      } else {
+        current_coeff = beta[j];
+      }
       nu[j] = rinvgamma(1.0, 1.0 + 1.0 / safe_var(tau_beta[j]*tau_beta[j]));
-      tau_beta[j] = std::sqrt(safe_var(rinvgamma(1.0, (1.0 / safe_var(nu[j])) + (beta[j] * beta[j]) / safe_var(2.0 * tau_glob * tau_glob * sigma2))));
+      tau_beta[j] = std::sqrt(safe_var(rinvgamma(1.0, (1.0 / safe_var(nu[j])) + (current_coeff * current_coeff) / safe_var(2.0 * tau_glob * tau_glob * sigma2))));
     }
+    
     if(unlink){
       for(size_t k = 0; k < int_pairs.size(); k++){
-        int full_idx = p_mod + k;
+        int full_idx = p_mod + k + regularize_ATE;
         nu[full_idx] = rinvgamma(1.0, 1.0 + 1.0 / safe_var(tau_beta[full_idx]*tau_beta[full_idx]));
         tau_beta[full_idx] = std::sqrt(safe_var(rinvgamma(1.0, (1.0 / safe_var(nu[full_idx])) + (beta_int[k] * beta_int[k]) / safe_var(2.0 * tau_glob * tau_glob * sigma2))));
       }
     }
+    
+    // 6. Sample global shrinkage parameter tau_glob
     if (global_shrink) {
       xi = rinvgamma(1.0, 1.0 + 1.0 / safe_var(tau_glob*tau_glob));
       double sum_scaled_sq_betas = 0.0;
-      for(int j = 0; j < p_mod; j++) sum_scaled_sq_betas += (beta[j]*beta[j]) / safe_var(tau_beta[j] * tau_beta[j]);
+      if(regularize_ATE){
+        sum_scaled_sq_betas += (alpha*alpha) / safe_var(tau_beta[0] * tau_beta[0]);
+      }
+      for(int j = 0; j < p_mod; j++) {
+        sum_scaled_sq_betas += (beta[j]*beta[j]) / safe_var(tau_beta[j + regularize_ATE] * tau_beta[j + regularize_ATE]);
+      }
+      
       if(unlink){
-        for(int k = 0; k < p_int; k++) sum_scaled_sq_betas += (beta_int[k] * beta_int[k]) / safe_var(tau_beta[p_mod + k] * tau_beta[p_mod + k]);
+        for(int k = 0; k < p_int; k++) {
+          sum_scaled_sq_betas += (beta_int[k] * beta_int[k]) / safe_var(tau_beta[p_mod + regularize_ATE + k] * tau_beta[p_mod + regularize_ATE + k]);
+        }
       } else {
         for(size_t k = 0; k < int_pairs.size(); ++k) {
-          sum_scaled_sq_betas += (beta_int[k] * beta_int[k]) / safe_var(tau_int * tau_beta[int_pairs[k].first] * tau_beta[int_pairs[k].second]);
+          // Indexing for linked shrinkage: tau_beta index = original covariate index + regularize_ATE offset.
+          double var_k = tau_int * tau_beta[regularize_ATE + int_pairs[k].first] * tau_beta[regularize_ATE + int_pairs[k].second];
+          sum_scaled_sq_betas += (beta_int[k] * beta_int[k]) / safe_var(var_k);
         }
       }
-      double shape_tau_glob = (static_cast<double>(p_mod + p_int) + 1.0) / 2.0;
+      double shape_tau_glob = (static_cast<double>(p_mod + p_int + regularize_ATE) + 1.0) / 2.0;
       double rate_tau_glob = (1.0 / safe_var(xi)) + (1.0 / safe_var(2.0 * sigma2)) * sum_scaled_sq_betas;
       tau_glob = std::sqrt(safe_var(rinvgamma(shape_tau_glob, rate_tau_glob)));
     }
     
-  } else { 
-
-    int P_combined = p_mod + p_int;
+  } else { // --- SLICE SAMPLER PATH ---
+    
+    int P_combined = p_mod + p_int + regularize_ATE;
     Eigen::Map<Eigen::VectorXd> beta_map(REAL(beta), p_mod);
     Eigen::Map<Eigen::VectorXd> beta_int_map(REAL(beta_int), p_int);
     
+    // 1. Construct target variable y* = residual + old_fit
     Eigen::VectorXd y_target = residual_map;
+    if(regularize_ATE){
+      y_target.array() += Z_map.array() * alpha;
+    }
     for (int j = 0; j < p_mod; ++j) {
       y_target.array() += Z_map.array() * X_map.col(j).array() * beta_map(j);
     }
     for (size_t k = 0; k < int_pairs.size(); ++k) {
       y_target.array() += Z_map.array() * X_map.col(int_pairs[k].first).array() * X_map.col(int_pairs[k].second).array() * beta_int_map(k);
-    } 
+    }
     
+    // 2. Define prior variance matrix D (excluding sigma^2)
     Eigen::VectorXd D_diag(P_combined);
-    for (int j = 0; j < p_mod; ++j) {
+    for (int j = 0; j < p_mod + regularize_ATE; ++j) {
       D_diag(j) = safe_var(tau_beta[j] * tau_beta[j] * tau_glob * tau_glob);
-    } 
+    }
     for (size_t k = 0; k < int_pairs.size(); ++k) {
       double V_k_star = unlink ?
-      (tau_beta[p_mod + k] * tau_beta[p_mod + k] * tau_glob * tau_glob) : 
-      (1.0 * tau_beta[int_pairs[k].first] * tau_beta[int_pairs[k].second] * tau_glob * tau_glob);
-      D_diag(p_mod + k) = safe_var(V_k_star);
-    } 
+      (tau_beta[regularize_ATE + p_mod + k] * tau_beta[regularize_ATE + p_mod + k] * tau_glob * tau_glob) :
+      // Note: tau_int logic differs slightly from Gibbs path in original code, matching original structure here.
+      (1.0 * tau_beta[regularize_ATE + int_pairs[k].first] * tau_beta[regularize_ATE + int_pairs[k].second] * tau_glob * tau_glob);
+      D_diag(regularize_ATE + p_mod + k) = safe_var(V_k_star);
+    }
     
     // 3. Block sample all beta coefficients
     Eigen::VectorXd beta_combined_new_eigen(P_combined);
-     
-    // Step A: Calculate XtX and Xt_y 
+    
+    // Step A: Calculate XtX and Xt_y
     Eigen::MatrixXd XtX = Eigen::MatrixXd::Zero(P_combined, P_combined);
     Eigen::VectorXd Xt_y = Eigen::VectorXd::Zero(P_combined);
     for (int i = 0; i < n; ++i) {
-      Eigen::VectorXd x_row_combined(P_combined);
-      for (int j = 0; j < p_mod; ++j) x_row_combined(j) = Z_map(i) * X_map(i, j);
-      for (size_t k = 0; k < int_pairs.size(); ++k) x_row_combined(p_mod + k) = Z_map(i) * X_map(i, int_pairs[k].first) * X_map(i, int_pairs[k].second);
+      Eigen::VectorXd x_row_combined(P_combined); // Declaration inside loop for clarity
+      if(regularize_ATE){
+        // FIX: Covariate for alpha is Z(i). Corrected typo and logic.
+        x_row_combined(0) = Z_map(i);
+      }
+      for (int j = 0; j < p_mod; ++j) {
+        x_row_combined(j + regularize_ATE) = Z_map(i) * X_map(i, j);
+      }
+      for (size_t k = 0; k < int_pairs.size(); ++k) {
+        x_row_combined(p_mod + k + regularize_ATE) = Z_map(i) * X_map(i, int_pairs[k].first) * X_map(i, int_pairs[k].second);
+      }
       XtX.selfadjointView<Eigen::Lower>().rankUpdate(x_row_combined);
       Xt_y += x_row_combined * y_target(i);
-    } 
+    }
     XtX = XtX.selfadjointView<Eigen::Lower>();
-     
+    
     // Step B: Form the unscaled posterior precision matrix (X'X + D^-1)
     Eigen::VectorXd D_inv_diag = D_diag.cwiseInverse();
     Eigen::MatrixXd Post_Prec_Unscaled = XtX + Eigen::MatrixXd(D_inv_diag.asDiagonal());
-     
+    
     // Step C: Calculate posterior parameters and sample
     Eigen::LLT<Eigen::MatrixXd> lltOfA(Post_Prec_Unscaled);
     if (lltOfA.info() == Eigen::Success) {
@@ -486,51 +556,78 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
       Eigen::MatrixXd L_chol = lltOfA.matrixL();
       Eigen::VectorXd std_normal_draws(P_combined);
       for (int k = 0; k < P_combined; ++k) std_normal_draws(k) = Rf_rnorm(0.0, 1.0);
+      // Re-using L_chol for solve, L' * result = std_normal_draws -> result = (L')^-1 * std_normal_draws
       beta_combined_new_eigen = post_mean_beta_eigen + sigma * L_chol.transpose().template triangularView<Eigen::Upper>().solve(std_normal_draws);
-    } else { 
+    } else {
       cpp11::warning("Cholesky decomposition failed in beta block sampling. Betas not updated.");
-      for(int j=0; j<p_mod; ++j) beta_combined_new_eigen(j) = beta[j];
-      for(int k=0; k<p_int; ++k) beta_combined_new_eigen(p_mod + k) = beta_int[k];
+      // Keep old values to avoid propagating NaNs or zeros
+      if(regularize_ATE) beta_combined_new_eigen(0) = alpha;
+      for(int j=0; j<p_mod; ++j) beta_combined_new_eigen(j + regularize_ATE) = beta[j];
+      for(int k=0; k<p_int; ++k) beta_combined_new_eigen(p_mod + regularize_ATE + k) = beta_int[k];
     }
-     
-    // Unpack new coefficients
-    for(int j=0; j<p_mod; ++j) beta[j] = beta_combined_new_eigen(j);
-    for(int k=0; k<p_int; ++k) beta_int[k] = beta_combined_new_eigen(p_mod + k);
     
-    // 4. Update residual map based on new coefficients
+    // 4. Unpack new coefficients
+    if(regularize_ATE){
+      alpha = beta_combined_new_eigen(0);
+    }
+    for(int j=0; j<p_mod; ++j) beta[j] = beta_combined_new_eigen(j + regularize_ATE);
+    for(int k=0; k<p_int; ++k) beta_int[k] = beta_combined_new_eigen(p_mod + k + regularize_ATE);
+    
+    // 5. Update residual map based on new coefficients
     Eigen::VectorXd new_fit = Eigen::VectorXd::Zero(n);
+    if(regularize_ATE){
+      new_fit.array() += Z_map.array() * alpha;
+    }
     for (int j=0; j<p_mod; ++j) new_fit.array() += Z_map.array() * X_map.col(j).array() * beta[j];
     for (size_t k = 0; k < int_pairs.size(); ++k) new_fit.array() += Z_map.array() * X_map.col(int_pairs[k].first).array() * X_map.col(int_pairs[k].second).array() * beta_int[k];
     residual_map = y_target - new_fit;
-     
-    // 5. Sample tau_beta using slice sampler, now conditional on the new block of betas
+    
+    // 6. Sample tau_beta using slice sampler, now conditional on the new block of betas
     std::vector<double> beta_int_std(beta_int.begin(), beta_int.end());
     std::vector<double> tau_beta_std(tau_beta.begin(), tau_beta.end());
     
-    for (int j = 0; j < p_mod; j++) {
-      double tb_j_new = sample_tau_j_slice(tau_beta[j], beta[j], j, beta_int_std, tau_beta_std, int_pairs, 1.0, sigma, tau_glob, unlink, step_out, max_steps);
+    for (int j = 0; j < p_mod + regularize_ATE; j++) {
+      double current_coeff;
+      // FIX: Select correct coefficient for update. Indexing logic required for regularize_ATE=true.
+      if (regularize_ATE) {
+        current_coeff = (j == 0) ? alpha : beta[j - 1];
+      } else {
+        current_coeff = beta[j];
+      }
+      
+      // Determine unlink status for this specific coefficient update.
+      // Force unlink=true if regularize_ATE=true to avoid index collision issues in logPosteriorTauJ.
+      bool current_unlink = regularize_ATE ? true : unlink;
+      
+      // The index passed to logPosteriorTauJ is j. If regularize_ATE=true, index 0 corresponds to alpha.
+      // When current_unlink=true, the interaction part of logPosteriorTauJ is skipped, avoiding issues.
+      double tb_j_new = sample_tau_j_slice(tau_beta[j], current_coeff, j, beta_int_std, tau_beta_std, int_pairs, 1.0, sigma, tau_glob, current_unlink, step_out, max_steps);
       tau_beta[j] = tb_j_new;
       tau_beta_std[j] = tb_j_new;
-    } 
+    }
     
     if (unlink) {
       for (size_t k = 0; k < int_pairs.size(); k++) {
-        int full_idx = p_mod + k;
+        int full_idx = p_mod + k + regularize_ATE;
         double tb_k_new = sample_tau_j_slice(tau_beta[full_idx], beta_int[k], full_idx, beta_int_std, tau_beta_std, int_pairs, 1.0, sigma, tau_glob, unlink, step_out, max_steps);
         tau_beta[full_idx] = tb_k_new;
         tau_beta_std[full_idx] = tb_k_new;
       }
-    } 
+    }
     
-    // 6. Update global shrinkage tau_glob if applicable
+    // 7. Update global shrinkage tau_glob if applicable
     if (global_shrink) {
       std::vector<double> beta_std_current(beta.begin(), beta.end());
+      if(regularize_ATE){
+        beta_std_current.insert(beta_std_current.begin(), alpha);
+      }
       tau_glob = sample_tau_global_slice(tau_glob, beta_std_current, beta_int_std, tau_beta_std, int_pairs, 1.0, sigma, unlink, step_out, max_steps);
-    } 
+    }
     
-    // Ensure tau_int is set to 1.0 as it's disregarded in this path. The argument is ignored but we set it here for clarity.
-    tau_int = 1.0; 
-  } 
+    // Ensure tau_int is set to 1.0 as it's disregarded in this path.
+    tau_int = 1.0;
+  }
+  
   // --- CONSOLIDATE AND RETURN RESULTS ---
   size_t total_size = 5 + beta.size() + beta_int.size() + tau_beta.size() + nu.size() + residual.size();
   cpp11::writable::doubles output;
