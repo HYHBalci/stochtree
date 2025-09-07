@@ -58,7 +58,8 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     int index = 1,
     int max_steps = 50,
     double step_out = 0.5,
-    const std::string& propensity_seperate = "none"
+    const std::string& propensity_seperate = "none",
+    bool regularize_ATE = false
 );
 
 // cpp11::list run_mcmc_sampler_2(

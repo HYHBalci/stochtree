@@ -159,7 +159,7 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
     treated_coding_init = 0.5, rfx_prior_var = NULL, 
     random_seed = -1, keep_burnin = FALSE, keep_gfr = FALSE, 
     keep_every = 1, num_chains = 1, verbose = T, global_shrinkage = F, unlink = F, 
-    propensity_seperate = "none", step_out = 0.5, max_steps = 50, gibbs = F, save_output = F, probit_outcome_model = F , interaction_rule = "continuous", standardize_cov = F, simple_prior = F, save_partial_residual = F
+    propensity_seperate = "none", step_out = 0.5, max_steps = 50, gibbs = F, save_output = F, probit_outcome_model = F , interaction_rule = "continuous", standardize_cov = F, simple_prior = F, save_partial_residual = F, regularize_ATE = F
   )
   general_params_updated <- preprocessParams(
     general_params_default, general_params
@@ -181,6 +181,8 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
   save_output <- general_params_updated$save_output
   interaction_rule <- general_params_updated$interaction_rule
   standardize_cov <- general_params_updated$standardize_cov
+  regularize_ATE <- general_params_updated$regularize_ATE
+  
   propensity_seperate <- match.arg(general_params_updated$propensity_seperate, choices = c("none", "mu", "tau"))
   # Interaction term initialization
   save_partial_residual <- general_params_updated$save_partial_residual
@@ -214,16 +216,17 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
   n <- nrow(X_train)
   alpha <- 0 
   gamma <- 0 
+
   if(propensity_seperate == "tau"){
     p_mod <- p_mod + 1
   }
   beta <- rep(0, p_mod)
   xi <- 1
   if (unlink) {   
-    tau_beta <- c(rep(1, p_mod), rep(1, p_int))  # Separate shrinkage
+    tau_beta <- c(rep(1, p_mod + regularize_ATE), rep(1, p_int))  # Separate shrinkage
     nu <- 1 / (tau_beta^2)  # Initialize auxiliary variables
   } else {
-    tau_beta <- rep(1, p_mod)  # Local shrinkage parameters
+    tau_beta <- rep(1, p_mod + regularize_ATE)  # Local shrinkage parameters
     nu <- 1 / (tau_beta^2)  # Initialize auxiliary variables
   }
   
@@ -1155,8 +1158,9 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
         index = sample_counter,
         max_steps = max_steps,
         step_out = step_out,
-        propensity_seperate = propensity_seperate
-        
+        propensity_seperate = propensity_seperate,
+        regularize_ATE = regularize_ATE
+
       )
       beta_start <- 6
       beta_end <- beta_start + p_mod - 1
@@ -1528,7 +1532,8 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           index = sample_counter,
           max_steps = max_steps,
           step_out = step_out,
-          propensity_seperate = propensity_seperate
+          propensity_seperate = propensity_seperate,
+          regularize_ATE = regularize_ATE
           
         )
         beta_start <- 6
