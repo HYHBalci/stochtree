@@ -165,10 +165,25 @@ double sample_tau_j_slice(double tau_old, double beta_j, int index, const std::v
   return tau_old;
 }
 
-double logPosteriorTauGlob(double tau_glob, const std::vector<double>& betas, const std::vector<double>& beta_int, const std::vector<double>& tau, const std::vector<std::pair<int, int>>& int_pairs, double tau_int, double sigma, bool unlink) {
+double logPosteriorTauGlob(double tau_glob, 
+                           const std::vector<double>& betas, 
+                           const std::vector<double>& beta_int, 
+                           const std::vector<double>& tau, 
+                           const std::vector<std::pair<int, int>>& int_pairs, 
+                           double tau_int, 
+                           double sigma, 
+                           bool unlink,
+                           const std::string& prior_type,
+                           double prior_scale = 1.0) {   
+  
   if (tau_glob <= 0.0) return -std::numeric_limits<double>::infinity();
   
-  double logPrior = std::log(2.0 / M_PI) - safe_log(1.0 + tau_glob * tau_glob);
+  double logPrior = 0.0;
+  if (prior_type == "half-cauchy") {
+    logPrior = -safe_log(1.0 + tau_glob * tau_glob);
+  } else if (prior_type == "half-normal") {
+    logPrior = -(tau_glob * tau_glob) / (2.0 * prior_scale * prior_scale);
+  }
   double sigma2 = sigma * sigma;
   double log2pi = std::log(2.0 * M_PI);
   double logLik = 0.0;
@@ -176,18 +191,37 @@ double logPosteriorTauGlob(double tau_glob, const std::vector<double>& betas, co
   for (size_t s = 0; s < betas.size(); s++) {
     double var_main = safe_var(sigma2 * (tau[s] * tau[s]) * (tau_glob * tau_glob));
     logLik += -0.5 * (log2pi + safe_log(var_main)) - 0.5 * (betas[s] * betas[s] / var_main);
-  }
+  } 
+  
   for (size_t m = 0; m < int_pairs.size(); m++) {
     double var_jk = unlink ?
-    safe_var(sigma2 * (tau[betas.size() + m] * tau[betas.size() + m]) * (tau_glob * tau_glob)) :
+    safe_var(sigma2 * (tau[betas.size() + m] * tau[betas.size() + m]) * (tau_glob * tau_glob)) : 
     safe_var(sigma2 * (tau[int_pairs[m].first] * tau[int_pairs[m].second]) * (tau_glob * tau_glob) * tau_int);
     logLik += -0.5 * (log2pi + safe_log(var_jk)) - 0.5 * (beta_int[m] * beta_int[m] / var_jk);
   }
+   
   return logPrior + logLik;
-}
+} 
 
-double sample_tau_global_slice(double tau_old, const std::vector<double>& beta, const std::vector<double>& beta_int, const std::vector<double>& tau, const std::vector<std::pair<int, int>>& int_pairs, double tau_int, double sigma, bool unlink, double step_out, int max_steps) {
-  double logP_old = logPosteriorTauGlob(tau_old, beta, beta_int, tau, int_pairs, tau_int, sigma, unlink);
+double sample_tau_global_slice(double tau_old, 
+                               const std::vector<double>& beta, 
+                               const std::vector<double>& beta_int, 
+                               const std::vector<double>& tau, 
+                               const std::vector<std::pair<int, int>>& int_pairs, 
+                               double tau_int, 
+                               double sigma, 
+                               bool unlink, 
+                               double step_out, 
+                               int max_steps,
+                               const std::string& prior_type, // <-- NIEUW
+                               double prior_scale = 1.0) {   // <-- NIEUW
+  auto logPost = [&](double t_g) {
+    return logPosteriorTauGlob(t_g, beta, beta_int, tau, int_pairs, 
+                               tau_int, sigma, unlink, 
+                               prior_type, prior_scale);
+  }; 
+  
+  double logP_old = logPost(tau_old);
   if (is_invalid(logP_old)) return tau_old;
   
   double y_slice = logP_old - Rf_rexp(1.0);
@@ -195,21 +229,21 @@ double sample_tau_global_slice(double tau_old, const std::vector<double>& beta, 
   double R = tau_old + step_out;
   
   for (int s = 0; s < max_steps; ++s) {
-    if (L <= 1e-6 || logPosteriorTauGlob(L, beta, beta_int, tau, int_pairs, tau_int, sigma, unlink) <= y_slice) break;
+    if (L <= 1e-6 || logPost(L) <= y_slice) break;
     L = std::max(1e-6, L - step_out);
-  }
+  } 
   for (int s = 0; s < max_steps; ++s) {
-    if (logPosteriorTauGlob(R, beta, beta_int, tau, int_pairs, tau_int, sigma, unlink) <= y_slice) break;
+    if (logPost(R) <= y_slice) break;
     R += step_out;
-  }
+  } 
   
   for (int rep = 0; rep < max_steps; rep++) {
     double prop = Rf_runif(L, R);
-    if (logPosteriorTauGlob(prop, beta, beta_int, tau, int_pairs, tau_int, sigma, unlink) > y_slice) return prop;
+    if (logPost(prop) > y_slice) return prop; 
     if (prop < tau_old) L = prop; else R = prop;
   }
-  return tau_old;
-}
+  return tau_old; 
+} 
 
 double loglikeTauInt(double tau_int, const std::vector<double>& beta_int, const std::vector<std::pair<int, int>>& int_pairs, const std::vector<double>& tau_main, double sigma, double tau_glob) {
   if (tau_int <= 0.0) return -std::numeric_limits<double>::infinity();
@@ -247,7 +281,7 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     double sigma,
     double alpha_prior_sd,
     double tau_glob = 1.0,
-    bool global_shrink = false,
+    const std::string& sample_global_prior = "none", 
     bool unlink = false,
     bool gibbs = false,
     bool save_output = true,
@@ -255,7 +289,8 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     int max_steps = 50,
     double step_out = 0.5,
     const std::string& propensity_seperate = "none",
-    bool regularize_ATE = false) {
+    bool regularize_ATE = false,
+    double hn_scale = 1.0) {
   
   // --- INITIAL SETUP ---
   int n = residual.size();
@@ -340,42 +375,43 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
       
       // Construct combined design matrix X_combined (n x P_combined)
       Eigen::MatrixXd X_combined(n, P_combined);
+      // ... (your X_combined construction is correct) ...
       if(regularize_ATE){
-        // FIX: The covariate for alpha is Z itself, not Z*alpha.
         X_combined.col(0) = Z_map;
       }
-      for (int j = 0; j < p_mod; ++j) {
+      for (int j = 0; j < p_mod; ++j) { 
         X_combined.col(j + regularize_ATE) = Z_map.array() * X_map.col(j).array();
-      }
+      } 
       for (size_t k = 0; k < int_pairs.size(); ++k) {
         X_combined.col(p_mod + regularize_ATE + k) = Z_map.array() * X_map.col(int_pairs[k].first).array() * X_map.col(int_pairs[k].second).array();
       }
       
+      double sigma2 = sigma * sigma;
+      Eigen::MatrixXd D_scaled_mat = D_mat / sigma2; // Create the scaled prior covariance
+      Eigen::VectorXd D_scaled_diag = D_diag / sigma2;
+      
       Eigen::VectorXd u(P_combined);
-      for (int j = 0; j < P_combined; ++j) u(j) = Rf_rnorm(0.0, std::sqrt(D_diag(j)));
+      for (int j = 0; j < P_combined; ++j) u(j) = Rf_rnorm(0.0, std::sqrt(D_scaled_diag(j)));
+      
       Eigen::VectorXd delta(n);
       for (int i = 0; i < n; ++i) delta(i) = Rf_rnorm(0.0, 1.0);
       
       Eigen::VectorXd v = X_combined * u + delta;
       
-      Eigen::MatrixXd M_solve = X_combined * D_mat * X_combined.transpose();
-      M_solve.diagonal().array() += 1.0;
+      Eigen::MatrixXd M_solve = X_combined * D_scaled_mat * X_combined.transpose();
+      M_solve.diagonal().array() += 1.0; 
       
-      // FIX: Define y_target_scaled = y_target / sigma. The variable was used without initialization.
-      Eigen::VectorXd y_target_scaled = y_target / sigma;
+      Eigen::VectorXd y_target_scaled = y_target / sigma; 
       
       Eigen::LLT<Eigen::MatrixXd> lltOfM(M_solve);
       if (lltOfM.info() != Eigen::Success) {
         cpp11::warning("Cholesky of n x n system failed in fast sampler. Betas not updated.");
-        beta_combined_new_eigen.setZero(); // Avoid using uninitialized memory
-        if(regularize_ATE) beta_combined_new_eigen(0) = alpha;
-        for(int j=0; j<p_mod; ++j) beta_combined_new_eigen(j + regularize_ATE) = beta[j];
-        for(int k=0; k<p_int; ++k) beta_combined_new_eigen(p_mod + regularize_ATE + k) = beta_int[k];
-      } else {
+      } else { 
         Eigen::VectorXd w = lltOfM.solve(y_target_scaled - v);
-        Eigen::VectorXd beta_tilde_new = u + D_mat * X_combined.transpose() * w;
+        Eigen::VectorXd beta_tilde_new = u + D_scaled_mat * X_combined.transpose() * w;
+        
         beta_combined_new_eigen = sigma * beta_tilde_new;
-      }
+      } 
       
     } else {
       // Standard Gibbs Sampler (for p < n)
@@ -386,11 +422,9 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
       for (int i = 0; i < n; ++i) {
         Eigen::VectorXd x_row_combined(P_combined);
         if(regularize_ATE){
-          // FIX: The covariate for alpha is Z(i), not Z(i)*alpha. Indexing fixed.
           x_row_combined(0) = Z_map(i);
         }
         for (int j = 0; j < p_mod; ++j) {
-          // FIX: Simplified indexing: column index is j + regularize_ATE. Covariate index is j.
           x_row_combined(j + regularize_ATE) = Z_map(i) * X_map(i, j);
         }
         for (size_t k = 0; k < int_pairs.size(); ++k) {
@@ -401,11 +435,9 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
       }
       XtX = XtX.selfadjointView<Eigen::Lower>();
       
-      // Step B: Form the unscaled posterior precision matrix (X'X + D^-1)
       Eigen::VectorXd D_inv_diag = D_diag.cwiseInverse();
       Eigen::MatrixXd Post_Prec_Unscaled = XtX + Eigen::MatrixXd(D_inv_diag.asDiagonal());
       
-      // Step C: Calculate posterior parameters and sample
       Eigen::LLT<Eigen::MatrixXd> lltOfA(Post_Prec_Unscaled);
       if (lltOfA.info() == Eigen::Success) {
         Eigen::VectorXd post_mean_beta_eigen = lltOfA.solve(Xt_y);
@@ -417,14 +449,13 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
         
       } else {
         cpp11::warning("Cholesky decomposition failed in standard Gibbs sampler. Betas not updated.");
-        beta_combined_new_eigen.setZero(); // Avoid using uninitialized memory
+        beta_combined_new_eigen.setZero(); 
         if(regularize_ATE) beta_combined_new_eigen(0) = alpha;
         for(int j=0; j<p_mod; ++j) beta_combined_new_eigen(j + regularize_ATE) = beta[j];
         for(int k=0; k<p_int; ++k) beta_combined_new_eigen(p_mod + regularize_ATE + k) = beta_int[k];
       }
     }
     
-    // 3. Unpack new coefficients from combined vector
     if(regularize_ATE){
       alpha = beta_combined_new_eigen(0);
       for(int j=0; j<p_mod; ++j) beta[j] = beta_combined_new_eigen(j + 1);
@@ -445,7 +476,6 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     
     // 5. Sample local shrinkage parameters tau_beta (and nu)
     for(int j = 0; j < p_mod + regularize_ATE; j++){
-      // FIX: Select correct coefficient for update. If regularize_ATE=true, index j=0 corresponds to alpha, index j=1 corresponds to beta[0], etc.
       double current_coeff;
       if (regularize_ATE) {
         current_coeff = (j == 0) ? alpha : beta[j - 1];
@@ -465,7 +495,8 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     }
     
     // 6. Sample global shrinkage parameter tau_glob
-    if (global_shrink) {
+    // --- GEWIJZIGD BLOK ---
+    if (sample_global_prior == "half-cauchy") {
       xi = rinvgamma(1.0, 1.0 + 1.0 / safe_var(tau_glob*tau_glob));
       double sum_scaled_sq_betas = 0.0;
       if(regularize_ATE){
@@ -473,23 +504,48 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
       }
       for(int j = 0; j < p_mod; j++) {
         sum_scaled_sq_betas += (beta[j]*beta[j]) / safe_var(tau_beta[j + regularize_ATE] * tau_beta[j + regularize_ATE]);
-      }
+      } 
       
       if(unlink){
         for(int k = 0; k < p_int; k++) {
           sum_scaled_sq_betas += (beta_int[k] * beta_int[k]) / safe_var(tau_beta[p_mod + regularize_ATE + k] * tau_beta[p_mod + regularize_ATE + k]);
-        }
+        } 
       } else {
         for(size_t k = 0; k < int_pairs.size(); ++k) {
           // Indexing for linked shrinkage: tau_beta index = original covariate index + regularize_ATE offset.
           double var_k = tau_int * tau_beta[regularize_ATE + int_pairs[k].first] * tau_beta[regularize_ATE + int_pairs[k].second];
           sum_scaled_sq_betas += (beta_int[k] * beta_int[k]) / safe_var(var_k);
         }
-      }
+      } 
       double shape_tau_glob = (static_cast<double>(p_mod + p_int + regularize_ATE) + 1.0) / 2.0;
       double rate_tau_glob = (1.0 / safe_var(xi)) + (1.0 / safe_var(2.0 * sigma2)) * sum_scaled_sq_betas;
       tau_glob = std::sqrt(safe_var(rinvgamma(shape_tau_glob, rate_tau_glob)));
-    }
+      
+    } else if (sample_global_prior == "half-normal") { 
+      xi = 1.0;
+      
+      std::vector<double> beta_std_current(beta.begin(), beta.end());
+      if(regularize_ATE){
+        beta_std_current.insert(beta_std_current.begin(), alpha);
+      }
+      std::vector<double> beta_int_std(beta_int.begin(), beta_int.end());
+      std::vector<double> tau_beta_std(tau_beta.begin(), tau_beta.end());
+      
+      tau_glob = sample_tau_global_slice(
+        tau_glob, 
+        beta_std_current, 
+        beta_int_std,
+        tau_beta_std,
+        int_pairs, 
+        tau_int,
+        sigma, 
+        unlink, 
+        step_out, 
+        max_steps,
+        "half-normal", 
+        hn_scale       
+      );    
+      } 
     
   } else { // --- SLICE SAMPLER PATH ---
     
@@ -531,7 +587,6 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     for (int i = 0; i < n; ++i) {
       Eigen::VectorXd x_row_combined(P_combined); // Declaration inside loop for clarity
       if(regularize_ATE){
-        // FIX: Covariate for alpha is Z(i). Corrected typo and logic.
         x_row_combined(0) = Z_map(i);
       }
       for (int j = 0; j < p_mod; ++j) {
@@ -556,11 +611,9 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
       Eigen::MatrixXd L_chol = lltOfA.matrixL();
       Eigen::VectorXd std_normal_draws(P_combined);
       for (int k = 0; k < P_combined; ++k) std_normal_draws(k) = Rf_rnorm(0.0, 1.0);
-      // Re-using L_chol for solve, L' * result = std_normal_draws -> result = (L')^-1 * std_normal_draws
       beta_combined_new_eigen = post_mean_beta_eigen + sigma * L_chol.transpose().template triangularView<Eigen::Upper>().solve(std_normal_draws);
     } else {
       cpp11::warning("Cholesky decomposition failed in beta block sampling. Betas not updated.");
-      // Keep old values to avoid propagating NaNs or zeros
       if(regularize_ATE) beta_combined_new_eigen(0) = alpha;
       for(int j=0; j<p_mod; ++j) beta_combined_new_eigen(j + regularize_ATE) = beta[j];
       for(int k=0; k<p_int; ++k) beta_combined_new_eigen(p_mod + regularize_ATE + k) = beta_int[k];
@@ -588,7 +641,6 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     
     for (int j = 0; j < p_mod + regularize_ATE; j++) {
       double current_coeff;
-      // FIX: Select correct coefficient for update. Indexing logic required for regularize_ATE=true.
       if (regularize_ATE) {
         current_coeff = (j == 0) ? alpha : beta[j - 1];
       } else {
@@ -615,18 +667,27 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
       }
     }
     
-    // 7. Update global shrinkage tau_glob if applicable
-    if (global_shrink) {
+    if (sample_global_prior != "none") {
       std::vector<double> beta_std_current(beta.begin(), beta.end());
       if(regularize_ATE){
         beta_std_current.insert(beta_std_current.begin(), alpha);
       }
-      tau_glob = sample_tau_global_slice(tau_glob, beta_std_current, beta_int_std, tau_beta_std, int_pairs, 1.0, sigma, unlink, step_out, max_steps);
-    }
-    
-    // Ensure tau_int is set to 1.0 as it's disregarded in this path.
-    tau_int = 1.0;
-  }
+      
+      tau_glob = sample_tau_global_slice(
+        tau_glob, 
+        beta_std_current, 
+        beta_int_std,
+        tau_beta_std,
+        int_pairs, 
+        1.0, 
+        sigma, 
+        unlink, 
+        step_out, 
+        max_steps,
+        sample_global_prior, 
+        hn_scale            
+      ); 
+    }}
   
   // --- CONSOLIDATE AND RETURN RESULTS ---
   size_t total_size = 5 + beta.size() + beta_int.size() + tau_beta.size() + nu.size() + residual.size();
@@ -649,7 +710,7 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     outfile.close();
   }
   return output;
-}
+  }
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 // SECTION 3: MCMC SAMPLER WRAPPER
@@ -686,6 +747,377 @@ Eigen::VectorXd calculate_component_fit(
 
   return fit; 
 }
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// SECTION 4: MAIN C++ WORKER FUNCTION (NON-CENTERED - ***NEW***)
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+//
+// This function implements the Non-Centered Parameterization (NCP).
+// It accepts 'beta_tilde' and 'beta_int_tilde' as its state variables.
+// Your R code MCMC loop must store and pass these tilde values.
+//
+// NOTE: The 'beta' and 'beta_int' vectors in the *return* output will
+//       contain the *updated tilde* values, NOT the real beta values.
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+[[cpp11::register]]
+cpp11::writable::doubles updateLinearTreatmentCpp_NCP_cpp(
+    const cpp11::doubles_matrix<>& X,
+    const cpp11::doubles& Z,
+    const cpp11::doubles& propensity_train,
+    cpp11::writable::doubles residual,
+    const cpp11::r_vector<int>& are_continuous,
+    double alpha_tilde, // NOTE: Pass alpha_tilde
+    double gamma, 
+    cpp11::writable::doubles beta_tilde,     // NOTE: Pass beta_tilde
+    cpp11::writable::doubles beta_int_tilde, // NOTE: Pass beta_int_tilde
+    cpp11::writable::doubles tau_beta,
+    cpp11::writable::doubles nu,
+    double xi,
+    double tau_int,
+    double sigma,
+    double alpha_prior_sd, // For the *unregularized* alpha if regularize_ATE = false
+    double tau_glob = 1.0,
+    const std::string& sample_global_prior = "none", 
+    bool unlink = false,
+    bool gibbs = true, // Defaulting to true, as NCP-Gibbs is the standard
+    bool save_output = true,
+    int index = 1,
+    int max_steps = 50,
+    double step_out = 0.5,
+    const std::string& propensity_seperate = "none",
+    bool regularize_ATE = false,
+    double hn_scale = 1.0) {
+  
+  // --- INITIAL SETUP ---
+  int n = residual.size();
+  int p_mod = X.ncol();
+  int p_int = beta_int_tilde.size();
+  double sigma2 = sigma * sigma;
+  
+  std::vector<std::pair<int, int>> int_pairs;
+  if (p_int > 0) {
+    int_pairs.reserve(p_int);
+    for (int i = 0; i < p_mod; i++) {
+      for (int j = i + 1; j < p_mod; j++) {
+        if(!((propensity_seperate == "tau") & ((i == (p_mod -1))| (j == (p_mod-1))))){
+          if ((are_continuous[i] == 1) || (are_continuous[j] == 1)) {
+            int_pairs.push_back(std::make_pair(i, j));
+          }
+        }
+      }
+    }
+  }
+  
+  Eigen::Map<Eigen::VectorXd> residual_map(REAL(residual), n);
+  Eigen::Map<const Eigen::VectorXd> Z_map(REAL(Z), n);
+  Eigen::Map<const Eigen::MatrixXd> X_map(REAL(X), n, p_mod);
+  
+  // Map tilde vectors (these are our state variables)
+  Eigen::Map<Eigen::VectorXd> beta_tilde_map(REAL(beta_tilde), p_mod);
+  Eigen::Map<Eigen::VectorXd> beta_int_tilde_map(REAL(beta_int_tilde), p_int);
+  
+  // --- NCP: Calculate current *real* betas from tildes ---
+  Eigen::VectorXd beta_current(p_mod);
+  Eigen::VectorXd beta_int_current(p_int);
+  double alpha_current = alpha_tilde; // Will be overwritten if regularize_ATE=true
+  
+  if(regularize_ATE) {
+    alpha_current = alpha_tilde * tau_beta[0] * tau_glob;
+  }
+  for (int j = 0; j < p_mod; ++j) {
+    beta_current(j) = beta_tilde_map(j) * tau_beta[j + regularize_ATE] * tau_glob;
+  }
+  for (size_t k = 0; k < int_pairs.size(); ++k) {
+    double V_k_star_tau_only = unlink ?
+    (tau_beta[p_mod + regularize_ATE + k]) :
+    (std::sqrt(tau_int) * tau_beta[int_pairs[k].first + regularize_ATE] * tau_beta[int_pairs[k].second + regularize_ATE]);
+    beta_int_current(k) = beta_int_tilde_map(k) * V_k_star_tau_only * tau_glob;
+  }
+  
+  // --- GAMMA & ALPHA UPDATES (VECTORIZED) ---
+  
+  if (propensity_seperate == "mu") {
+    Eigen::Map<const Eigen::VectorXd> propensity_map(REAL(propensity_train), n);
+    residual_map += propensity_map * gamma;
+    gamma = sample_alpha_cpp(residual, propensity_train, sigma, 10);
+    residual_map -= propensity_map * gamma;
+  }
+  if (!regularize_ATE){
+    // If not regularizing ATE, we sample alpha_tilde as the *real* alpha
+    // but its name in the R loop is 'alpha_tilde' for consistency
+    residual_map += Z_map * alpha_current; // alpha_current = alpha_tilde
+    alpha_tilde = sample_alpha_cpp(residual, Z, sigma, alpha_prior_sd);
+    residual_map -= Z_map * alpha_tilde;
+    alpha_current = alpha_tilde; // Update current value
+  }
+  
+  // --- BETA & TAU UPDATES ---
+  if (gibbs) {
+    int P_combined = p_mod + p_int + regularize_ATE;
+    bool use_bhatt_sampler = P_combined >= n;
+    
+    // 1. Construct target variable y* = residual + old_fit
+    //    Uses the *real* beta/alpha values we just calculated
+    Eigen::VectorXd y_target = residual_map;
+    if(regularize_ATE){
+      y_target.array() += Z_map.array() * alpha_current;
+    }
+    for (int j = 0; j < p_mod; ++j) {
+      y_target.array() += Z_map.array() * X_map.col(j).array() * beta_current(j);
+    }
+    for (size_t k = 0; k < int_pairs.size(); ++k) {
+      y_target.array() += Z_map.array() * X_map.col(int_pairs[k].first).array() * X_map.col(int_pairs[k].second).array() * beta_int_current(k);
+    }
+    
+    // This will hold the new sample for *tilde* coefficients
+    Eigen::VectorXd beta_tilde_combined_new_eigen(P_combined);
+    
+    // --- ALGORITHM CHOICE ---
+    if (use_bhatt_sampler) {
+      // --- NCP Bhattacharya sampler (for p > n) ---
+      // Model: y_target ~ N(X* beta_tilde, sigma^2 I_n)
+      // Prior: beta_tilde ~ N(0, I_p)
+      
+      // Construct scaled design matrix X*
+      Eigen::MatrixXd X_star(n, P_combined);
+      if(regularize_ATE){
+        X_star.col(0) = Z_map.array() * tau_beta[0] * tau_glob;
+      }
+      for (int j = 0; j < p_mod; ++j) { 
+        X_star.col(j + regularize_ATE) = Z_map.array() * X_map.col(j).array() * tau_beta[j + regularize_ATE] * tau_glob;
+      } 
+      for (size_t k = 0; k < int_pairs.size(); ++k) {
+        double V_k_star_tau_only = unlink ?
+        (tau_beta[p_mod + regularize_ATE + k]) :
+        (std::sqrt(tau_int) * tau_beta[int_pairs[k].first + regularize_ATE] * tau_beta[int_pairs[k].second + regularize_ATE]);
+        X_star.col(p_mod + regularize_ATE + k) = Z_map.array() * X_map.col(int_pairs[k].first).array() * X_map.col(int_pairs[k].second).array() * V_k_star_tau_only * tau_glob;
+      }
+      
+      Eigen::MatrixXd X_star_scaled = X_star / sigma;
+      Eigen::MatrixXd D_scaled_mat = Eigen::MatrixXd::Identity(P_combined, P_combined) / sigma2; // Prior is N(0, I)
+      
+      Eigen::VectorXd u(P_combined);
+      for (int j = 0; j < P_combined; ++j) u(j) = Rf_rnorm(0.0, 1.0); // u ~ N(0, I_p)
+      
+      Eigen::VectorXd delta(n);
+      for (int i = 0; i < n; ++i) delta(i) = Rf_rnorm(0.0, 1.0); // delta ~ N(0, I_n)
+      
+      Eigen::VectorXd v = X_star_scaled * u + delta; // v ~ N(0, (X*X*^T)/sigma^2 + I_n)
+      
+      Eigen::MatrixXd M_solve = X_star_scaled * X_star_scaled.transpose();
+      M_solve.diagonal().array() += 1.0; 
+      
+      Eigen::VectorXd y_target_scaled = y_target / sigma; 
+      
+      Eigen::LLT<Eigen::MatrixXd> lltOfM(M_solve);
+      if (lltOfM.info() != Eigen::Success) {
+        cpp11::warning("Cholesky of n x n system failed in NCP fast sampler. Betas not updated.");
+      } else { 
+        Eigen::VectorXd w = lltOfM.solve(y_target_scaled - v);
+        beta_tilde_combined_new_eigen = u + X_star_scaled.transpose() * w;
+      } 
+      
+    } else {
+      // --- NCP Standard Gibbs Sampler (for p < n) ---
+      // Model: y_target ~ N(X* beta_tilde, sigma^2 I_n)
+      // Prior: beta_tilde ~ N(0, I_p)
+      
+      // Step A: Calculate X*tX* and X*t_y
+      Eigen::MatrixXd XtX_star = Eigen::MatrixXd::Zero(P_combined, P_combined);
+      Eigen::VectorXd Xt_y_star = Eigen::VectorXd::Zero(P_combined);
+      for (int i = 0; i < n; ++i) {
+        Eigen::VectorXd x_row_star(P_combined);
+        if(regularize_ATE){
+          x_row_star(0) = Z_map(i) * tau_beta[0] * tau_glob;
+        }
+        for (int j = 0; j < p_mod; ++j) {
+          x_row_star(j + regularize_ATE) = Z_map(i) * X_map(i, j) * tau_beta[j + regularize_ATE] * tau_glob;
+        }
+        for (size_t k = 0; k < int_pairs.size(); ++k) {
+          double V_k_star_tau_only = unlink ?
+          (tau_beta[p_mod + regularize_ATE + k]) :
+          (std::sqrt(tau_int) * tau_beta[int_pairs[k].first + regularize_ATE] * tau_beta[int_pairs[k].second + regularize_ATE]);
+          x_row_star(p_mod + regularize_ATE + k) = Z_map(i) * X_map(i, int_pairs[k].first) * X_map(i, int_pairs[k].second) * V_k_star_tau_only * tau_glob;
+        }
+        XtX_star.selfadjointView<Eigen::Lower>().rankUpdate(x_row_star);
+        Xt_y_star += x_row_star * y_target(i);
+      }
+      XtX_star = XtX_star.selfadjointView<Eigen::Lower>();
+      
+      // Post_Prec = (X*tX* / sigma^2) + I_p
+      Eigen::MatrixXd Post_Prec = (XtX_star / sigma2) + Eigen::MatrixXd::Identity(P_combined, P_combined);
+      Eigen::VectorXd Xt_y_star_scaled = Xt_y_star / sigma2;
+      
+      Eigen::LLT<Eigen::MatrixXd> lltOfA(Post_Prec);
+      if (lltOfA.info() == Eigen::Success) {
+        Eigen::VectorXd post_mean_beta_tilde_eigen = lltOfA.solve(Xt_y_star_scaled);
+        Eigen::MatrixXd L_chol = lltOfA.matrixL();
+        Eigen::VectorXd std_normal_draws(P_combined);
+        for (int k = 0; k < P_combined; ++k) std_normal_draws(k) = Rf_rnorm(0.0, 1.0);
+        
+        // Sample for tilde_beta does not include sigma
+        beta_tilde_combined_new_eigen = post_mean_beta_tilde_eigen + L_chol.transpose().template triangularView<Eigen::Upper>().solve(std_normal_draws);
+        
+      } else {
+        cpp11::warning("Cholesky decomposition failed in NCP Gibbs sampler. Betas not updated.");
+        beta_tilde_combined_new_eigen.setZero(); 
+        if(regularize_ATE) beta_tilde_combined_new_eigen(0) = alpha_tilde;
+        for(int j=0; j<p_mod; ++j) beta_tilde_combined_new_eigen(j + regularize_ATE) = beta_tilde[j];
+        for(int k=0; k<p_int; ++k) beta_tilde_combined_new_eigen(p_mod + regularize_ATE + k) = beta_int_tilde[k];
+      }
+    }
+    
+    // Unpack new *tilde* coefficients
+    if(regularize_ATE){
+      alpha_tilde = beta_tilde_combined_new_eigen(0);
+    }
+    for(int j=0; j<p_mod; ++j) beta_tilde[j] = beta_tilde_combined_new_eigen(j + regularize_ATE);
+    for(int k=0; k<p_int; ++k) beta_int_tilde[k] = beta_tilde_combined_new_eigen(p_mod + k + regularize_ATE);
+    
+    // 4. Recalculate *real* coefficients and residual
+    // (This step is vital before sampling taus)
+    if(regularize_ATE) {
+      alpha_current = alpha_tilde * tau_beta[0] * tau_glob;
+    }
+    for (int j = 0; j < p_mod; ++j) {
+      beta_current(j) = beta_tilde_map(j) * tau_beta[j + regularize_ATE] * tau_glob;
+    }
+    for (size_t k = 0; k < int_pairs.size(); ++k) {
+      double V_k_star_tau_only = unlink ?
+      (tau_beta[p_mod + regularize_ATE + k]) :
+      (std::sqrt(tau_int) * tau_beta[int_pairs[k].first + regularize_ATE] * tau_beta[int_pairs[k].second + regularize_ATE]);
+      beta_int_current(k) = beta_int_tilde_map(k) * V_k_star_tau_only * tau_glob;
+    }
+    
+    Eigen::VectorXd new_fit = Eigen::VectorXd::Zero(n);
+    if(regularize_ATE){
+      new_fit.array() += Z_map.array() * alpha_current;
+    }
+    for (int j=0; j<p_mod; ++j) new_fit.array() += Z_map.array() * X_map.col(j).array() * beta_current(j);
+    for (size_t k = 0; k < int_pairs.size(); ++k) new_fit.array() += Z_map.array() * X_map.col(int_pairs[k].first).array() * X_map.col(int_pairs[k].second).array() * beta_int_current(k);
+    residual_map = y_target - new_fit;
+    
+    // 5. Sample local shrinkage parameters tau_beta (and nu)
+    // *** THIS IS THE KEY NCP STEP: sigma2 IS REMOVED ***
+    for(int j = 0; j < p_mod + regularize_ATE; j++){
+      double current_coeff_tilde;
+      if (regularize_ATE) {
+        current_coeff_tilde = (j == 0) ? alpha_tilde : beta_tilde[j - 1];
+      } else {
+        current_coeff_tilde = beta_tilde[j];
+      }
+      nu[j] = rinvgamma(1.0, 1.0 + 1.0 / safe_var(tau_beta[j]*tau_beta[j]));
+      tau_beta[j] = std::sqrt(safe_var(rinvgamma(1.0, (1.0 / safe_var(nu[j])) + (current_coeff_tilde * current_coeff_tilde) / safe_var(2.0 * tau_glob * tau_glob))));
+    }
+    
+    if(unlink){
+      for(size_t k = 0; k < int_pairs.size(); k++){
+        int full_idx = p_mod + k + regularize_ATE;
+        nu[full_idx] = rinvgamma(1.0, 1.0 + 1.0 / safe_var(tau_beta[full_idx]*tau_beta[full_idx]));
+        tau_beta[full_idx] = std::sqrt(safe_var(rinvgamma(1.0, (1.0 / safe_var(nu[full_idx])) + (beta_int_tilde[k] * beta_int_tilde[k]) / safe_var(2.0 * tau_glob * tau_glob))));
+      }
+    }
+    
+    // 6. Sample global shrinkage parameter tau_glob
+    // *** THIS IS THE KEY NCP STEP: sigma2 IS REMOVED ***
+    if (sample_global_prior == "half-cauchy") {
+      xi = rinvgamma(1.0, 1.0 + 1.0 / safe_var(tau_glob*tau_glob));
+      double sum_scaled_sq_betas_tilde = 0.0;
+      if(regularize_ATE){
+        sum_scaled_sq_betas_tilde += (alpha_tilde*alpha_tilde) / safe_var(tau_beta[0] * tau_beta[0]);
+      }
+      for(int j = 0; j < p_mod; j++) {
+        sum_scaled_sq_betas_tilde += (beta_tilde[j]*beta_tilde[j]) / safe_var(tau_beta[j + regularize_ATE] * tau_beta[j + regularize_ATE]);
+      } 
+      
+      if(unlink){
+        for(int k = 0; k < p_int; k++) {
+          sum_scaled_sq_betas_tilde += (beta_int_tilde[k] * beta_int_tilde[k]) / safe_var(tau_beta[p_mod + regularize_ATE + k] * tau_beta[p_mod + regularize_ATE + k]);
+        } 
+      } else {
+        for(size_t k = 0; k < int_pairs.size(); ++k) {
+          double var_k = tau_int * tau_beta[regularize_ATE + int_pairs[k].first] * tau_beta[regularize_ATE + int_pairs[k].second];
+          sum_scaled_sq_betas_tilde += (beta_int_tilde[k] * beta_int_tilde[k]) / safe_var(var_k);
+        }
+      } 
+      double shape_tau_glob = (static_cast<double>(p_mod + p_int + regularize_ATE) + 1.0) / 2.0;
+      double rate_tau_glob = (1.0 / safe_var(xi)) + (1.0 / safe_var(2.0)) * sum_scaled_sq_betas_tilde; // sigma2 removed
+      tau_glob = std::sqrt(safe_var(rinvgamma(shape_tau_glob, rate_tau_glob)));
+      
+    } else if (sample_global_prior == "half-normal") { 
+      // NCP Slice Sampler for tau_glob
+      xi = 1.0;
+      std::vector<double> beta_std_current(beta_tilde.begin(), beta_tilde.end());
+      if(regularize_ATE){
+        beta_std_current.insert(beta_std_current.begin(), alpha_tilde);
+      }
+      std::vector<double> beta_int_std(beta_int_tilde.begin(), beta_int_tilde.end());
+      std::vector<double> tau_beta_std(tau_beta.begin(), tau_beta.end());
+      
+      // We re-use the *centered* slice sampler, but pass sigma=1.0 and beta_tildes
+      // This is a "hack" but logPosteriorTauGlob will compute the correct NCP posterior
+      // if we pass beta_tilde and sigma=1.0
+      // Let's modify logPosteriorTauGlob to be correct for NCP...
+      // Easiest to just re-use the CP slice sampler with a "fake" sigma
+      
+      // Let's call the CP slice sampler. It expects "betas" not "beta tildes"
+      // and a "sigma". The NCP posterior for tau_glob does not depend on sigma.
+      // We can't use the CP slice sampler.
+      
+      // ---
+      // As noted in the helper section, the NCP slice sampler is non-trivial to
+      // derive correctly. Given the CP slice sampler also failed, I am
+      // ONLY implementing the NCP-GIBBS path.
+      // ---
+      cpp11::warning("NCP with Half-Normal prior (slice sampler) is not implemented. tau_glob not updated.");
+    } 
+    
+  } else { // --- SLICE SAMPLER PATH ---
+    
+    // ---
+    // As noted in your plots, the CP Slice Sampler is also failing (bimodal).
+    // The NCP Slice Sampler is complex to derive vs the standard NCP Gibbs.
+    // This implementation *only* supports the NCP-Gibbs path.
+    // ---
+    cpp11::stop("NCP is only implemented for the `gibbs = true` path. Please set gibbs=true when using NCP.");
+    
+  }
+  
+  // --- CONSOLIDATE AND RETURN RESULTS ---
+  // NOTE: We return the TILDE values in the 'beta' and 'beta_int' slots
+  // so the R loop can store them for the next iteration.
+  size_t total_size = 5 + beta_tilde.size() + beta_int_tilde.size() + tau_beta.size() + nu.size() + residual.size();
+  cpp11::writable::doubles output;
+  output.reserve(total_size);
+  output.push_back(alpha_tilde);
+  output.push_back(tau_int);
+  output.push_back(tau_glob);
+  output.push_back(gamma);
+  output.push_back(xi);
+  for (double val : beta_tilde) output.push_back(val);   // Return beta_tilde
+  for (double val : beta_int_tilde) output.push_back(val); // Return beta_int_tilde
+  for (double val : tau_beta) output.push_back(val);
+  for (double val : nu) output.push_back(val);
+  for (int i = 0; i < n; ++i) output.push_back(residual_map[i]);
+  
+  if (save_output) {
+    // Save output log
+    // We create temporary 'real' betas just for logging
+    cpp11::writable::doubles beta_real_log(p_mod);
+    cpp11::writable::doubles beta_int_real_log(p_int);
+    double alpha_real_log = regularize_ATE ? alpha_current : alpha_tilde;
+    for(int j=0; j<p_mod; ++j) beta_real_log[j] = beta_current[j];
+    for(int k=0; k<p_int; ++k) beta_int_real_log[k] = beta_int_current[k];
+    
+    std::ofstream outfile("output_log.txt", std::ios::app);
+    save_output_vector_labeled(outfile, alpha_real_log, tau_int, tau_glob, xi, sigma, 
+                               beta_real_log, beta_int_real_log, tau_beta, nu, index);
+    outfile.close();
+  }
+  return output;
+}
+
 // 
 // [[cpp11::register]]
 // cpp11::list run_mcmc_sampler_2(

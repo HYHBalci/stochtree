@@ -35,8 +35,10 @@ interaction_pairs <- function(num_covariates, boolean_vector) {
 #'
 #' @param index The row index in the data matrix `X` for which to compute Shapley values.
 #' @param X A centered covariate matrix (n x p).
-#' @param beta_post Posterior samples of main effects (chains x samples x p).
-#' @param beta_int_post Posterior samples of interaction effects (chains x samples x p_int).
+#' @param beta_post Posterior samples of main effects. Can be a 3D array 
+#'   (chains x samples x p) or a 2D matrix (total_samples x p).
+#' @param beta_int_post Posterior samples of interaction effects. Can be a 3D array
+#'   (chains x samples x p_int) or a 2D matrix (total_samples x p_int).
 #'   The dimension p_int must correspond to the number of pairs generated based on `boolean_interaction`.
 #' @param boolean_interaction A logical vector indicating which variables are allowed to have interactions.
 #' @return A long-format tibble containing the posterior samples of the Shapley values.
@@ -52,18 +54,55 @@ shapley <- function(index, X, beta_post, beta_int_post, boolean_interaction) {
   ipairs <- interaction_pairs(num_covariates, boolean_interaction)
   p_int <- ncol(ipairs)
   
-  num_beta_int_coeffs <- if (!is.null(beta_int_post)) dim(beta_int_post)[3] else 0
-  if (num_beta_int_coeffs != p_int) {
+  # Check format of posteriors (3D array or 2D matrix)
+  is_3D <- length(dim(beta_post)) == 3
+  
+  # --- Validate Interaction Dimensions ---
+  num_beta_int_coeffs <- 0
+  if (!is.null(beta_int_post)) {
+    int_dims <- dim(beta_int_post)
+    if (is_3D) {
+      # 3D format: chains x samples x p_int
+      if (length(int_dims) != 3) stop("beta_int_post is not 3D, but beta_post is.")
+      num_beta_int_coeffs <- int_dims[3]
+    } else {
+      # 2D format: samples x p_int
+      if (length(int_dims) != 2) stop("beta_int_post is not 2D, but beta_post is.")
+      num_beta_int_coeffs <- int_dims[2]
+    }
+  }
+  
+  # Handle case where p_int is 0
+  if (p_int == 0) {
+    # If no interactions are expected, check that none were provided
+    if (num_beta_int_coeffs > 0) {
+      stop(paste("Dimension mismatch: The number of interaction pairs is 0,",
+                 "but beta_int_post has", num_beta_int_coeffs, "coefficients."))
+    }
+  } else if (num_beta_int_coeffs != p_int) {
+    # If interactions are expected, check that the dimensions match
     stop(paste("Dimension mismatch: The number of interaction pairs is", p_int,
                "but beta_int_post has", num_beta_int_coeffs, "coefficients."))
   }
-
-  beta_samples <- do.call(rbind, lapply(1:dim(beta_post)[1], function(chain) beta_post[chain, , ]))
+  
+  # --- Prepare Posterior Samples ---
+  if (is_3D) {
+    # 3D: Combine chains
+    beta_samples <- do.call(rbind, lapply(1:dim(beta_post)[1], function(chain) beta_post[chain, , ]))
+  } else {
+    # 2D: Already in correct format
+    beta_samples <- beta_post
+  }
   
   # Prepare interaction samples, handling the case of zero interactions.
   if (p_int > 0) {
-    beta_int_samples <- do.call(rbind, lapply(1:dim(beta_int_post)[1], function(chain) beta_int_post[chain, , ]))
+    if (is_3D) {
+      beta_int_samples <- do.call(rbind, lapply(1:dim(beta_int_post)[1], function(chain) beta_int_post[chain, , ]))
+    } else {
+      beta_int_samples <- beta_int_post
+    }
   } else {
+    # Create empty matrix with correct number of rows (samples)
     beta_int_samples <- matrix(0, nrow = nrow(beta_samples), ncol = 0)
   }
   
@@ -115,5 +154,68 @@ compute_shapley_all <- function(X, beta_post, beta_int_post, indices = NULL, boo
   if (is.null(indices)) indices <- sample(1:nrow(X), 100)
   all_shapleys <- purrr::map_dfr(indices, ~shapley(.x, X, beta_post, beta_int_post, boolean_interaction))
   return(all_shapleys)
+}
+
+#' Plot Shapley Value Distributions
+#'
+#' Creates a summary violin and boxplot of Shapley value distributions
+#' for each feature, aggregated across all posterior samples and observations.
+#'
+#' Features are automatically ordered by their mean absolute Shapley value,
+#' placing the most important features at the top of the plot.
+#'
+#' @param shapley_data A long-format data frame, typically the output of
+#'   `compute_shapley_all()`. Must contain 'feature' and 'shapley' columns.
+#' @param ... Additional arguments passed to the `aes()` call in ggplot.
+#' @return A ggplot object.
+#' @import ggplot2
+#' @importFrom forcats fct_reorder
+#' @importFrom rlang .data
+#' @export
+plot_shapley_summary <- function(shapley_data, ...) {
+  
+  if (!requireNamespace("ggplot2", quietly = TRUE)) {
+    stop("Package 'ggplot2' needed for this function to work. Please install it.", call. = FALSE)
+  }
+  if (!requireNamespace("forcats", quietly = TRUE)) {
+    stop("Package 'forcats' needed for this function to work. Please install it.", call. = FALSE)
+  }
+  
+  p <- ggplot2::ggplot(
+    shapley_data,
+    ggplot2::aes(
+      x = .data$shapley,
+      # Reorder features by mean absolute shapley value
+      y = forcats::fct_reorder(.data$feature, .data$shapley, .fun = function(x) mean(abs(x))),
+      fill = .data$feature,
+      ...
+    )
+  ) +
+    ggplot2::geom_violin(trim = FALSE, alpha = 0.6, show.legend = FALSE) +
+    ggplot2::geom_boxplot(
+      width = 0.15,
+      fill = "white",
+      outlier.shape = NA,
+      show.legend = FALSE
+    ) +
+    ggplot2::geom_vline(
+      xintercept = 0,
+      linetype = "dashed",
+      color = "black",
+      linewidth = 0.7
+    ) +
+    ggplot2::labs(
+      title = "Shapley Value Distribution per Feature",
+      subtitle = "Aggregated across posterior samples and selected observations",
+      x = "Shapley Value (Contribution to Prediction)",
+      y = "Feature"
+    ) +
+    ggplot2::theme_minimal(base_size = 14) +
+    ggplot2::theme(
+      panel.grid.major.y = ggplot2::element_blank(),
+      panel.grid.minor.y = ggplot2::element_blank()
+    )
+  
+  return(p)
 }
 
