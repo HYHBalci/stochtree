@@ -1557,6 +1557,8 @@ bcf <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_group_id
 #' preds <- predict(bcf_model, X_test, Z_test, pi_test)
 predict.bcfmodel <- function(object, X, Z, propensity = NULL, rfx_group_ids = NULL, rfx_basis = NULL, ...){
     # Preprocess covariates
+  
+    print('1')
     if ((!is.data.frame(X)) && (!is.matrix(X))) {
         stop("X must be a matrix or dataframe")
     }
@@ -1657,12 +1659,13 @@ predict.bcfmodel <- function(object, X, Z, propensity = NULL, rfx_group_ids = NU
             variance_forest_predictions <- s_x_raw*initial_sigma2*y_std*y_std
         }
     }
-
+    print('flag1')
     result <- list(
         "mu_hat" = mu_hat, 
         "tau_hat" = tau_hat, 
         "y_hat" = y_hat
     )
+    print('flag2')
     if (object$model_params$has_rfx) {
         result[["rfx_predictions"]] = rfx_predictions
     }

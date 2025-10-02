@@ -38,6 +38,8 @@ Imports:
     stats,
     tibble,
     tidyr,
-    dplyr
+    dplyr,
+    keras,
+    nnet
 URL: https://stochtree.ai/, https://github.com/StochasticTree/stochtree
 BugReports: https://github.com/StochasticTree/stochtree/issues
