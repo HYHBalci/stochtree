@@ -340,42 +340,43 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
       
       // Construct combined design matrix X_combined (n x P_combined)
       Eigen::MatrixXd X_combined(n, P_combined);
+      // ... (your X_combined construction is correct) ...
       if(regularize_ATE){
-        // FIX: The covariate for alpha is Z itself, not Z*alpha.
         X_combined.col(0) = Z_map;
       }
-      for (int j = 0; j < p_mod; ++j) {
+      for (int j = 0; j < p_mod; ++j) { 
         X_combined.col(j + regularize_ATE) = Z_map.array() * X_map.col(j).array();
-      }
+      } 
       for (size_t k = 0; k < int_pairs.size(); ++k) {
         X_combined.col(p_mod + regularize_ATE + k) = Z_map.array() * X_map.col(int_pairs[k].first).array() * X_map.col(int_pairs[k].second).array();
       }
       
+      double sigma2 = sigma * sigma;
+      Eigen::MatrixXd D_scaled_mat = D_mat / sigma2; // Create the scaled prior covariance
+      Eigen::VectorXd D_scaled_diag = D_diag / sigma2;
+      
       Eigen::VectorXd u(P_combined);
-      for (int j = 0; j < P_combined; ++j) u(j) = Rf_rnorm(0.0, std::sqrt(D_diag(j)));
+      for (int j = 0; j < P_combined; ++j) u(j) = Rf_rnorm(0.0, std::sqrt(D_scaled_diag(j)));
+      
       Eigen::VectorXd delta(n);
       for (int i = 0; i < n; ++i) delta(i) = Rf_rnorm(0.0, 1.0);
       
       Eigen::VectorXd v = X_combined * u + delta;
       
-      Eigen::MatrixXd M_solve = X_combined * D_mat * X_combined.transpose();
-      M_solve.diagonal().array() += 1.0;
+      Eigen::MatrixXd M_solve = X_combined * D_scaled_mat * X_combined.transpose();
+      M_solve.diagonal().array() += 1.0; 
       
-      // FIX: Define y_target_scaled = y_target / sigma. The variable was used without initialization.
-      Eigen::VectorXd y_target_scaled = y_target / sigma;
+      Eigen::VectorXd y_target_scaled = y_target / sigma; 
       
       Eigen::LLT<Eigen::MatrixXd> lltOfM(M_solve);
       if (lltOfM.info() != Eigen::Success) {
         cpp11::warning("Cholesky of n x n system failed in fast sampler. Betas not updated.");
-        beta_combined_new_eigen.setZero(); // Avoid using uninitialized memory
-        if(regularize_ATE) beta_combined_new_eigen(0) = alpha;
-        for(int j=0; j<p_mod; ++j) beta_combined_new_eigen(j + regularize_ATE) = beta[j];
-        for(int k=0; k<p_int; ++k) beta_combined_new_eigen(p_mod + regularize_ATE + k) = beta_int[k];
-      } else {
+      } else { 
         Eigen::VectorXd w = lltOfM.solve(y_target_scaled - v);
-        Eigen::VectorXd beta_tilde_new = u + D_mat * X_combined.transpose() * w;
+        Eigen::VectorXd beta_tilde_new = u + D_scaled_mat * X_combined.transpose() * w;
+        
         beta_combined_new_eigen = sigma * beta_tilde_new;
-      }
+      } 
       
     } else {
       // Standard Gibbs Sampler (for p < n)
@@ -386,11 +387,9 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
       for (int i = 0; i < n; ++i) {
         Eigen::VectorXd x_row_combined(P_combined);
         if(regularize_ATE){
-          // FIX: The covariate for alpha is Z(i), not Z(i)*alpha. Indexing fixed.
           x_row_combined(0) = Z_map(i);
         }
         for (int j = 0; j < p_mod; ++j) {
-          // FIX: Simplified indexing: column index is j + regularize_ATE. Covariate index is j.
           x_row_combined(j + regularize_ATE) = Z_map(i) * X_map(i, j);
         }
         for (size_t k = 0; k < int_pairs.size(); ++k) {
@@ -401,11 +400,9 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
       }
       XtX = XtX.selfadjointView<Eigen::Lower>();
       
-      // Step B: Form the unscaled posterior precision matrix (X'X + D^-1)
       Eigen::VectorXd D_inv_diag = D_diag.cwiseInverse();
       Eigen::MatrixXd Post_Prec_Unscaled = XtX + Eigen::MatrixXd(D_inv_diag.asDiagonal());
       
-      // Step C: Calculate posterior parameters and sample
       Eigen::LLT<Eigen::MatrixXd> lltOfA(Post_Prec_Unscaled);
       if (lltOfA.info() == Eigen::Success) {
         Eigen::VectorXd post_mean_beta_eigen = lltOfA.solve(Xt_y);
@@ -417,14 +414,13 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
         
       } else {
         cpp11::warning("Cholesky decomposition failed in standard Gibbs sampler. Betas not updated.");
-        beta_combined_new_eigen.setZero(); // Avoid using uninitialized memory
+        beta_combined_new_eigen.setZero(); 
         if(regularize_ATE) beta_combined_new_eigen(0) = alpha;
         for(int j=0; j<p_mod; ++j) beta_combined_new_eigen(j + regularize_ATE) = beta[j];
         for(int k=0; k<p_int; ++k) beta_combined_new_eigen(p_mod + regularize_ATE + k) = beta_int[k];
       }
     }
     
-    // 3. Unpack new coefficients from combined vector
     if(regularize_ATE){
       alpha = beta_combined_new_eigen(0);
       for(int j=0; j<p_mod; ++j) beta[j] = beta_combined_new_eigen(j + 1);
@@ -445,7 +441,6 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     
     // 5. Sample local shrinkage parameters tau_beta (and nu)
     for(int j = 0; j < p_mod + regularize_ATE; j++){
-      // FIX: Select correct coefficient for update. If regularize_ATE=true, index j=0 corresponds to alpha, index j=1 corresponds to beta[0], etc.
       double current_coeff;
       if (regularize_ATE) {
         current_coeff = (j == 0) ? alpha : beta[j - 1];
@@ -531,7 +526,6 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     for (int i = 0; i < n; ++i) {
       Eigen::VectorXd x_row_combined(P_combined); // Declaration inside loop for clarity
       if(regularize_ATE){
-        // FIX: Covariate for alpha is Z(i). Corrected typo and logic.
         x_row_combined(0) = Z_map(i);
       }
       for (int j = 0; j < p_mod; ++j) {
@@ -556,11 +550,9 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
       Eigen::MatrixXd L_chol = lltOfA.matrixL();
       Eigen::VectorXd std_normal_draws(P_combined);
       for (int k = 0; k < P_combined; ++k) std_normal_draws(k) = Rf_rnorm(0.0, 1.0);
-      // Re-using L_chol for solve, L' * result = std_normal_draws -> result = (L')^-1 * std_normal_draws
       beta_combined_new_eigen = post_mean_beta_eigen + sigma * L_chol.transpose().template triangularView<Eigen::Upper>().solve(std_normal_draws);
     } else {
       cpp11::warning("Cholesky decomposition failed in beta block sampling. Betas not updated.");
-      // Keep old values to avoid propagating NaNs or zeros
       if(regularize_ATE) beta_combined_new_eigen(0) = alpha;
       for(int j=0; j<p_mod; ++j) beta_combined_new_eigen(j + regularize_ATE) = beta[j];
       for(int k=0; k<p_int; ++k) beta_combined_new_eigen(p_mod + regularize_ATE + k) = beta_int[k];
@@ -588,7 +580,6 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     
     for (int j = 0; j < p_mod + regularize_ATE; j++) {
       double current_coeff;
-      // FIX: Select correct coefficient for update. Indexing logic required for regularize_ATE=true.
       if (regularize_ATE) {
         current_coeff = (j == 0) ? alpha : beta[j - 1];
       } else {
