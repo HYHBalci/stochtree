@@ -548,8 +548,12 @@ root_reset_active_forest_cpp <- function(active_forest) {
   invisible(.Call(`_stochtree_root_reset_active_forest_cpp`, active_forest))
 }
 
-updateLinearTreatmentCpp_cpp <- function(X, Z, propensity_train, residual, are_continuous, alpha, gamma, beta, beta_int, tau_beta, nu, xi, tau_int, sigma, alpha_prior_sd, tau_glob, global_shrink, unlink, gibbs, save_output, index, max_steps, step_out, propensity_seperate, regularize_ATE) {
-  .Call(`_stochtree_updateLinearTreatmentCpp_cpp`, X, Z, propensity_train, residual, are_continuous, alpha, gamma, beta, beta_int, tau_beta, nu, xi, tau_int, sigma, alpha_prior_sd, tau_glob, global_shrink, unlink, gibbs, save_output, index, max_steps, step_out, propensity_seperate, regularize_ATE)
+updateLinearTreatmentCpp_cpp <- function(X, Z, propensity_train, residual, are_continuous, alpha, gamma, beta, beta_int, tau_beta, nu, xi, tau_int, sigma, alpha_prior_sd, tau_glob, sample_global_prior, unlink, gibbs, save_output, index, max_steps, step_out, propensity_seperate, regularize_ATE, hn_scale) {
+  .Call(`_stochtree_updateLinearTreatmentCpp_cpp`, X, Z, propensity_train, residual, are_continuous, alpha, gamma, beta, beta_int, tau_beta, nu, xi, tau_int, sigma, alpha_prior_sd, tau_glob, sample_global_prior, unlink, gibbs, save_output, index, max_steps, step_out, propensity_seperate, regularize_ATE, hn_scale)
+}
+
+updateLinearTreatmentCpp_NCP_cpp <- function(X, Z, propensity_train, residual, are_continuous, alpha_tilde, gamma, beta_tilde, beta_int_tilde, tau_beta, nu, xi, tau_int, sigma, alpha_prior_sd, tau_glob, sample_global_prior, unlink, gibbs, save_output, index, max_steps, step_out, propensity_seperate, regularize_ATE, hn_scale) {
+  .Call(`_stochtree_updateLinearTreatmentCpp_NCP_cpp`, X, Z, propensity_train, residual, are_continuous, alpha_tilde, gamma, beta_tilde, beta_int_tilde, tau_beta, nu, xi, tau_int, sigma, alpha_prior_sd, tau_glob, sample_global_prior, unlink, gibbs, save_output, index, max_steps, step_out, propensity_seperate, regularize_ATE, hn_scale)
 }
 
 forest_container_get_max_leaf_index_cpp <- function(forest_container, forest_num) {

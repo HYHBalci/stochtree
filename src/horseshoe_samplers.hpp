@@ -51,7 +51,7 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     double sigma,
     double alpha_prior_sd,
     double tau_glob = 1.0,
-    bool global_shrink = false,
+    const std::string& sample_global_prior = "none",
     bool unlink = false,
     bool gibbs = false,
     bool save_output = true,
@@ -59,7 +59,8 @@ cpp11::writable::doubles updateLinearTreatmentCpp_cpp(
     int max_steps = 50,
     double step_out = 0.5,
     const std::string& propensity_seperate = "none",
-    bool regularize_ATE = false
+    bool regularize_ATE = false,
+    double hn_scale = 1.0
 );
 
 // cpp11::list run_mcmc_sampler_2(

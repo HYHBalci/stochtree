@@ -157,7 +157,7 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
     treated_coding_init = 0.5, rfx_prior_var = NULL, 
     random_seed = -1, keep_burnin = FALSE, keep_gfr = FALSE, 
     keep_every = 1, num_chains = 1, verbose = T, global_shrinkage = F, unlink = F, 
-    propensity_seperate = F, step_out = 0.5, max_steps = 50, gibbs = F, save_output = F
+    propensity_seperate = F, step_out = 0.5, max_steps = 50, gibbs = F, save_output = F, hn_scale = 1
   )
   general_params_updated <- preprocessParams(
     general_params_default, general_params
@@ -193,7 +193,7 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
   # Residual standard deviation
   sigma <- 1  
   sigma2_samples <- numeric(num_mcmc)
-  
+  hn_scale <- general_params_updated$hn_scale 
   # Store all MCMC samples, accross different chains. 
   num_chains <- general_params_updated$num_chains
   alpha_samples <- matrix(0, nrow = num_chains, ncol = num_mcmc)
@@ -986,7 +986,8 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
         save_output = save_output,
         index = 184892,
         max_steps = max_steps,
-        step_out = step_out
+        step_out = step_out,
+        hn_scale = hn_scale 
         
       )
       beta_start <- 6 
@@ -1325,7 +1326,8 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
           save_output = save_output,
           index = sample_counter,
           max_steps = max_steps,
-          step_out = step_out
+          step_out = step_out,
+          hn_scale = hn_scale
           
         )
         beta_start <- 6 

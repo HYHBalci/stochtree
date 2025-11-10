@@ -11,9 +11,11 @@ shapley(index, X, beta_post, beta_int_post, boolean_interaction)
 
 \item{X}{A centered covariate matrix (n x p).}
 
-\item{beta_post}{Posterior samples of main effects (chains x samples x p).}
+\item{beta_post}{Posterior samples of main effects. Can be a 3D array
+(chains x samples x p) or a 2D matrix (total_samples x p).}
 
-\item{beta_int_post}{Posterior samples of interaction effects (chains x samples x p_int).
+\item{beta_int_post}{Posterior samples of interaction effects. Can be a 3D array
+(chains x samples x p_int) or a 2D matrix (total_samples x p_int).
 The dimension p_int must correspond to the number of pairs generated based on \code{boolean_interaction}.}
 
 \item{boolean_interaction}{A logical vector indicating which variables are allowed to have interactions.}
