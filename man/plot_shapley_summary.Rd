@@ -2,22 +2,24 @@
 % Please edit documentation in R/Shapley.R
 \name{plot_shapley_summary}
 \alias{plot_shapley_summary}
-\title{Plot Shapley Value Summaries for Multiple Observations}
+\title{Plot Shapley Value Distributions}
 \usage{
-plot_shapley_summary(X, beta_post, beta_int_post, indices = NULL)
+plot_shapley_summary(shapley_data, ...)
 }
 \arguments{
-\item{X}{A centered covariate matrix (n x p).}
+\item{shapley_data}{A long-format data frame, typically the output of
+\code{compute_shapley_all()}. Must contain 'feature' and 'shapley' columns.}
 
-\item{beta_post}{A 3D array of posterior main effect coefficients: (chains x samples x p).}
-
-\item{beta_int_post}{A 3D array of posterior interaction effect coefficients: (chains x samples x p_int).}
-
-\item{indices}{Optional vector of row indices in \code{X} to include. Defaults to 100 random samples.}
+\item{...}{Additional arguments passed to the \code{aes()} call in ggplot.}
 }
 \value{
-A \code{ggplot2} object visualizing the distribution of Shapley values for each feature.
+A ggplot object.
 }
 \description{
-Computes and visualizes Shapley value summaries across selected observations.
+Creates a summary violin and boxplot of Shapley value distributions
+for each feature, aggregated across all posterior samples and observations.
+}
+\details{
+Features are automatically ordered by their mean absolute Shapley value,
+placing the most important features at the top of the plot.
 }
