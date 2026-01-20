@@ -8,6 +8,7 @@ export(bart)
 export(bcf)
 export(bcf_linear)
 export(bcf_linear_probit)
+export(bcf_linear_probit_DR)
 export(calibrateInverseGammaErrorVariance)
 export(computeForestLeafIndices)
 export(computeForestLeafVariances)
@@ -79,10 +80,7 @@ importFrom(BayesLogit,rpg)
 importFrom(MASS,mvrnorm)
 importFrom(R6,R6Class)
 importFrom(dplyr,"%>%")
-<<<<<<< HEAD
 importFrom(forcats,fct_reorder)
-=======
->>>>>>> ceca0f0915a709233d75a4f65a53e6a13cdc5647
 importFrom(keras,callback_early_stopping)
 importFrom(keras,compile)
 importFrom(keras,fit)
@@ -92,10 +90,7 @@ importFrom(keras,layer_dense)
 importFrom(keras,layer_dropout)
 importFrom(keras,optimizer_adam)
 importFrom(nnet,nnet)
-<<<<<<< HEAD
 importFrom(rlang,.data)
-=======
->>>>>>> ceca0f0915a709233d75a4f65a53e6a13cdc5647
 importFrom(stats,coef)
 importFrom(stats,dnorm)
 importFrom(stats,lm)
