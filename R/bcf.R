@@ -1465,6 +1465,11 @@ bcf <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_group_id
         "y_hat_train" = y_hat_train, 
         "train_set_metadata" = X_train_metadata
     )
+    ##########################################
+    # DEBUG ###################################
+    result$debug_active_mu <- active_forest_mu
+    result$debug_dataset <- forest_dataset_train
+    # END DEBUG ##############################
     if (has_test) result[["mu_hat_test"]] = mu_hat_test
     if (has_test) result[["tau_hat_test"]] = tau_hat_test
     if (has_test) result[["y_hat_test"]] = y_hat_test
