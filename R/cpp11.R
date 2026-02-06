@@ -548,12 +548,20 @@ root_reset_active_forest_cpp <- function(active_forest) {
   invisible(.Call(`_stochtree_root_reset_active_forest_cpp`, active_forest))
 }
 
-updateLinearTreatmentCpp_cpp <- function(X, Z, propensity_train, residual, are_continuous, alpha, gamma, beta, beta_int, tau_beta, nu, xi, tau_int, sigma, alpha_prior_sd, tau_glob, sample_global_prior, unlink, gibbs, save_output, index, max_steps, step_out, propensity_seperate, regularize_ATE, hn_scale) {
-  .Call(`_stochtree_updateLinearTreatmentCpp_cpp`, X, Z, propensity_train, residual, are_continuous, alpha, gamma, beta, beta_int, tau_beta, nu, xi, tau_int, sigma, alpha_prior_sd, tau_glob, sample_global_prior, unlink, gibbs, save_output, index, max_steps, step_out, propensity_seperate, regularize_ATE, hn_scale)
+updateLinearTreatmentCpp_cpp <- function(X, Phi, Z, propensity_train, residual, are_continuous, alpha, gamma_prop, beta, beta_int, gamma, tau_beta, tau_gamma, nu, nu_gamma, xi, tau_int, sigma, alpha_prior_sd, tau_glob, sample_global_prior, unlink, gibbs, save_output, index, max_steps, step_out, propensity_seperate, regularize_ATE, hn_scale, use_prognostic_shapley) {
+  .Call(`_stochtree_updateLinearTreatmentCpp_cpp`, X, Phi, Z, propensity_train, residual, are_continuous, alpha, gamma_prop, beta, beta_int, gamma, tau_beta, tau_gamma, nu, nu_gamma, xi, tau_int, sigma, alpha_prior_sd, tau_glob, sample_global_prior, unlink, gibbs, save_output, index, max_steps, step_out, propensity_seperate, regularize_ATE, hn_scale, use_prognostic_shapley)
 }
 
-updateLinearTreatmentCpp_NCP_cpp <- function(X, Z, propensity_train, residual, are_continuous, alpha_tilde, gamma, beta_tilde, beta_int_tilde, tau_beta, nu, xi, tau_int, sigma, alpha_prior_sd, tau_glob, sample_global_prior, unlink, gibbs, save_output, index, max_steps, step_out, propensity_seperate, regularize_ATE, hn_scale) {
-  .Call(`_stochtree_updateLinearTreatmentCpp_NCP_cpp`, X, Z, propensity_train, residual, are_continuous, alpha_tilde, gamma, beta_tilde, beta_int_tilde, tau_beta, nu, xi, tau_int, sigma, alpha_prior_sd, tau_glob, sample_global_prior, unlink, gibbs, save_output, index, max_steps, step_out, propensity_seperate, regularize_ATE, hn_scale)
+updateLinearTreatmentCpp_NCP_cpp <- function(X, Phi, Z, propensity_train, residual, are_continuous, alpha_tilde, gamma_prop, beta_tilde, beta_int_tilde, gamma_tilde, tau_beta, tau_gamma, nu, nu_gamma, xi, tau_int, sigma, alpha_prior_sd, tau_glob, sample_global_prior, unlink, gibbs, save_output, index, max_steps, step_out, propensity_seperate, regularize_ATE, hn_scale, use_prognostic_shapley) {
+  .Call(`_stochtree_updateLinearTreatmentCpp_NCP_cpp`, X, Phi, Z, propensity_train, residual, are_continuous, alpha_tilde, gamma_prop, beta_tilde, beta_int_tilde, gamma_tilde, tau_beta, tau_gamma, nu, nu_gamma, xi, tau_int, sigma, alpha_prior_sd, tau_glob, sample_global_prior, unlink, gibbs, save_output, index, max_steps, step_out, propensity_seperate, regularize_ATE, hn_scale, use_prognostic_shapley)
+}
+
+updateLinearTreatmentCpp_cpp_old <- function(X, Z, propensity_train, residual, are_continuous, alpha, gamma, beta, beta_int, tau_beta, nu, xi, tau_int, sigma, alpha_prior_sd, tau_glob, sample_global_prior, unlink, gibbs, save_output, index, max_steps, step_out, propensity_seperate, regularize_ATE, hn_scale) {
+  .Call(`_stochtree_updateLinearTreatmentCpp_cpp_old`, X, Z, propensity_train, residual, are_continuous, alpha, gamma, beta, beta_int, tau_beta, nu, xi, tau_int, sigma, alpha_prior_sd, tau_glob, sample_global_prior, unlink, gibbs, save_output, index, max_steps, step_out, propensity_seperate, regularize_ATE, hn_scale)
+}
+
+updateLinearTreatmentCpp_NCP_cpp_old <- function(X, Z, propensity_train, residual, are_continuous, alpha_tilde, gamma, beta_tilde, beta_int_tilde, tau_beta, nu, xi, tau_int, sigma, alpha_prior_sd, tau_glob, sample_global_prior, unlink, gibbs, save_output, index, max_steps, step_out, propensity_seperate, regularize_ATE, hn_scale) {
+  .Call(`_stochtree_updateLinearTreatmentCpp_NCP_cpp_old`, X, Z, propensity_train, residual, are_continuous, alpha_tilde, gamma, beta_tilde, beta_int_tilde, tau_beta, nu, xi, tau_int, sigma, alpha_prior_sd, tau_glob, sample_global_prior, unlink, gibbs, save_output, index, max_steps, step_out, propensity_seperate, regularize_ATE, hn_scale)
 }
 
 forest_container_get_max_leaf_index_cpp <- function(forest_container, forest_num) {
@@ -782,4 +790,8 @@ json_load_file_cpp <- function(json_ptr, filename) {
 
 json_load_string_cpp <- function(json_ptr, json_string) {
   invisible(.Call(`_stochtree_json_load_string_cpp`, json_ptr, json_string))
+}
+
+get_saabas_shapley_active_forest_cpp <- function(active_forest, dataset) {
+  .Call(`_stochtree_get_saabas_shapley_active_forest_cpp`, active_forest, dataset)
 }

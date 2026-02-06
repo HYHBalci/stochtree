@@ -911,5 +911,10 @@ resetActiveForest <- function(active_forest, forest_samples=NULL, forest_num=NUL
 #' resetActiveForest(active_forest, forest_samples, 0)
 #' resetForestModel(forest_model, active_forest, forest_dataset, outcome, TRUE)
 resetForestModel <- function(forest_model, forest, dataset, residual, is_mean_model) {
-    reset_forest_model_cpp(forest_model$tracker_ptr, forest$forest_ptr, dataset$data_ptr, residual$data_ptr, is_mean_model)
-}
+  stochtree:::reset_forest_model_cpp(
+    forest_model$tracker_ptr, 
+    forest$forest_ptr, 
+    dataset$data_ptr, 
+    residual$data_ptr, 
+    is_mean_model
+  )}

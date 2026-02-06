@@ -24,4 +24,6 @@ OBJECTS = \
     partition_tracker.o \
     random_effects.o \
     tree.o \
-    horseshoe_samplers.o
+    horseshoe_samplers.o \
+    horseshoe_samplers_old.o \
+    shapley.o
