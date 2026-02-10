@@ -28,7 +28,7 @@ interaction_pairs <- function(num_covariates, boolean_vector) {
 }
 
 
-#' Shapley Value Calculator for x_{i}
+#' Shapley Value Calculator for x
 #'
 #' This function calculates Shapley values for a given observation, considering
 #' main effects and specified pairwise interaction effects.

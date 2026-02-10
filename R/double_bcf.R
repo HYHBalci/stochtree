@@ -469,39 +469,6 @@ bcf_linear_probit_DR <- function(X_train, Z_train, y_train, propensity_train = N
   # Check if previous model JSON is provided and parse it if so
   has_prev_model <- !is.null(previous_model_json)
   if (has_prev_model) {
-    previous_bcf_model <- createBCFModelFromJsonString(previous_model_json)
-    previous_y_bar <- previous_bcf_model$model_params$outcome_mean
-    previous_y_scale <- previous_bcf_model$model_params$outcome_scale
-    previous_forest_samples_mu <- previous_bcf_model$forests_mu
-    previous_forest_samples_tau <- previous_bcf_model$forests_tau
-    if (previous_bcf_model$model_params$include_variance_forest) {
-      previous_forest_samples_variance <- previous_bcf_model$forests_variance
-    } else previous_forest_samples_variance <- NULL
-    if (previous_bcf_model$model_params$sample_sigma2_global) {
-      previous_global_var_samples <- previous_bcf_model$sigma2_global_samples / (
-        previous_y_scale*previous_y_scale
-      )
-    } else previous_global_var_samples <- NULL
-    if (previous_bcf_model$model_params$sample_sigma2_leaf_mu) {
-      previous_leaf_var_mu_samples <- previous_bcf_model$sigma2_leaf_mu_samples
-    } else previous_leaf_var_mu_samples <- NULL
-    if (previous_bcf_model$model_params$sample_sigma2_leaf_tau) {
-      previous_leaf_var_tau_samples <- previous_bcf_model$sigma2_leaf_tau_samples
-    } else previous_leaf_var_tau_samples <- NULL
-    if (previous_bcf_model$model_params$has_rfx) {
-      previous_rfx_samples <- previous_bcf_model$rfx_samples
-    } else previous_rfx_samples <- NULL
-    if (previous_bcf_model$model_params$adaptive_coding) {
-      previous_b_1_samples <- previous_bcf_model$b_1_samples
-      previous_b_0_samples <- previous_bcf_model$b_0_samples
-    } else {
-      previous_b_1_samples <- NULL
-      previous_b_0_samples <- NULL
-    }
-    previous_model_num_samples <- previous_bcf_model$model_params$num_samples
-    if (previous_model_warmstart_sample_num > previous_model_num_samples) {
-      stop("`previous_model_warmstart_sample_num` exceeds the number of samples in `previous_model_json`")
-    }
   } else {
     previous_y_bar <- NULL
     previous_y_scale <- NULL

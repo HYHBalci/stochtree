@@ -86,6 +86,9 @@ safe_var_R <- function(x) {
 #' @export
 #' @importFrom MASS mvrnorm
 #' @importFrom BayesLogit rpg
+#' @importFrom stats contr.sum contrasts<- cov rgamma
+#' @importFrom utils flush.console
+#' @importFrom Rcpp sourceCpp
 
 linked_shrinkage_logistic_gibbs_R <- function( # Body of the function as previously provided
   y_vec, X_mat, Z_vec,

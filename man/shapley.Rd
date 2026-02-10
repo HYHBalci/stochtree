@@ -2,7 +2,7 @@
 % Please edit documentation in R/Shapley.R
 \name{shapley}
 \alias{shapley}
-\title{Shapley Value Calculator for x_{i}}
+\title{Shapley Value Calculator for x}
 \usage{
 shapley(index, X, beta_post, beta_int_post, boolean_interaction)
 }
