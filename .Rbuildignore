@@ -2,3 +2,4 @@
 ^\.Rproj\.user$
 ^cran-comments\.md$
 ^vignettes$
+^deps/fast_double_parser/benchmarks$

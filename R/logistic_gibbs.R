@@ -49,107 +49,44 @@ safe_var_R <- function(x) {
 #'
 #' @param y_vec Integer vector. Binary response variable (must contain only 0s and 1s).
 #' @param X_mat Numeric matrix. Covariate matrix for the prognostic part and for
-#'   forming interactions with the treatment indicator `Z_vec`.
-#'   Each row is an observation, each column is a covariate.
+#'    forming interactions with the treatment indicator `Z_vec`.
+#'    Each row is an observation, each column is a covariate.
 #' @param Z_vec Numeric vector. Treatment indicator (e.g., 0 or 1) or other key
-#'   variable modifying the effect of covariates in `X_mat`. Must have the same
-#'   length as `y_vec` and the number of rows in `X_mat`.
+#'    variable modifying the effect of covariates in `X_mat`. Must have the same
+#'    length as `y_vec` and the number of rows in `X_mat`.
 #' @param n_iter Integer. Total number of MCMC iterations.
 #' @param burn_in Integer. Number of initial MCMC iterations to discard as burn-in.
-#'   Must be less than `n_iter`.
+#'    Must be less than `n_iter`.
 #' @param alpha_prior_sd Numeric scalar. Standard deviation for the normal prior
-#'   of the global intercept `alpha`. Default is 10.0.
+#'    of the global intercept `alpha`. Default is 10.0.
 #' @param aleph_prior_sd Numeric scalar. Standard deviation for the normal prior
-#'   of the intercept `aleph` for the treatment-specific modifier part. Default is 10.0.
+#'    of the intercept `aleph` for the treatment-specific modifier part. Default is 10.0.
 #' @param init_alpha Numeric scalar. Initial value for the global intercept `alpha`.
-#'   Default is 0.0.
+#'    Default is 0.0.
 #' @param init_aleph Numeric scalar. Initial value for the intercept `aleph` of the
-#'   treatment-specific modifier. Default is 0.0.
+#'    treatment-specific modifier. Default is 0.0.
 #' @param seed Integer or NULL. Seed for R's random number generator to ensure
-#'   reproducibility. Default is 1848.
+#'    reproducibility. Default is 1848.
 #'
 #' @return A list containing MCMC samples (after burn-in) for the model parameters:
+#' \describe{
 #'   \item{alpha}{Numeric vector of samples for the global intercept `alpha`.}
-#'   \item{beta}{Numeric matrix of samples for the main prognostic effects `beta_vec`. Each row is an iteration, each column corresponds to a covariate in `X_mat`.}
-#'   \item{beta_interaction}{Numeric matrix of samples for the prognostic interaction effects `beta_interaction_vec` (pairwise interactions of `X_mat`). Each row is an iteration. Columns correspond to interaction pairs. Will have 0 columns if no interactions are possible (i.e., `ncol(X_mat) < 2`).}
-#'   \item{aleph}{Numeric vector of samples for the intercept `aleph` of the treatment-specific modifier.}
-#'   \item{gamma}{Numeric matrix of samples for the coefficients `gamma_vec` of Z*X terms. Each row is an iteration.}
-#'   \item{gamma_int}{Numeric matrix of samples for the coefficients `gamma_int_vec` of Z*X*X interaction terms. Each row is an iteration. Will have 0 columns if no interactions are possible.}
-#'   \item{tau_j}{Numeric matrix of samples for the local shrinkage parameters `tau_j_params_vec` for `beta_vec` coefficients.}
-#'   \item{tau_int_fixed_value}{Numeric scalar, the fixed value of `tau_int_param` (which is 1.0 in this version).}
-#'   \item{lambda_gamma}{Numeric matrix of samples for the local Horseshoe shrinkage parameters for `gamma_vec` coefficients.}
-#'   \item{lambda_g_int}{Numeric matrix of samples for the local Horseshoe shrinkage parameters for `gamma_int_vec` coefficients. Will have 0 columns if no interactions are possible.}
-#'   \item{tau_hs_combined}{Numeric vector of samples for the shared global Horseshoe shrinkage parameter for `gamma_vec` and `gamma_int_vec` coefficients.}
+#'   \item{beta}{Numeric matrix of samples for the main prognostic effects.}
+#'   \item{beta_interaction}{Numeric matrix of samples for prognostic interaction effects.}
+#'   \item{aleph}{Numeric vector of samples for the treatment-specific intercept.}
+#'   \item{gamma}{Numeric matrix of samples for the treatment modifier coefficients.}
+#'   \item{gamma_int}{Numeric matrix of samples for treatment interaction terms.}
+#'   \item{tau_j}{Numeric matrix of samples for local shrinkage parameters.}
+#'   \item{tau_int_fixed_value}{Numeric scalar, fixed value of 1.0.}
+#'   \item{lambda_gamma}{Numeric matrix of samples for local Horseshoe parameters.}
+#'   \item{lambda_g_int}{Numeric matrix of samples for interaction Horseshoe parameters.}
+#'   \item{tau_hs_combined}{Numeric vector of samples for the global Horseshoe parameter.}
+#' }
 #'
 #' @export
 #' @importFrom MASS mvrnorm
 #' @importFrom BayesLogit rpg
-#'
-#' @examples
-#' \dontrun{
-#' # Generate some dummy data
-#' N <- 100 # Number of observations
-#' p <- 3   # Number of covariates, keep small for R version speed
-#' X_data <- matrix(rnorm(N * p), nrow = N, ncol = p)
-#' colnames(X_data) <- paste0("X", 1:p)
-#' Z_data <- sample(0:1, N, replace = TRUE)
-#'
-#' # True parameters (example)
-#' true_alpha <- 0.2
-#' true_beta <- rnorm(p, 0, 0.5)
-#' true_beta_int_effects <- if (p >= 2) {
-#'   n_int <- ncol(combn(p, 2))
-#'   rnorm(n_int, 0, 0.2)
-#' } else { numeric(0) }
-#' true_aleph <- 0.5
-#' true_gamma <- rnorm(p, 0, 0.4)
-#' true_gamma_int_effects <- if (p >= 2) {
-#'  n_int <- ncol(combn(p, 2))
-#'  rnorm(n_int, 0, 0.1)
-#' } else { numeric(0) }
-#'
-#' # Construct linear predictor
-#' lin_pred <- true_alpha + X_data %*% true_beta
-#' if (p >= 2) {
-#'   pairs <- combn(1:p, 2)
-#'   for (k_int in 1:ncol(pairs)) {
-#'     lin_pred <- lin_pred + true_beta_int_effects[k_int] * X_data[,pairs[1,k_int]] * X_data[,pairs[2,k_int]]
-#'   }
-#' }
-#' treatment_part <- true_aleph + X_data %*% true_gamma
-#' if (p >= 2) {
-#'   pairs <- combn(1:p, 2)
-#'   for (k_int in 1:ncol(pairs)) {
-#'     treatment_part <- treatment_part + true_gamma_int_effects[k_int] * X_data[,pairs[1,k_int]] * X_data[,pairs[2,k_int]]
-#'   }
-#' }
-#' lin_pred <- lin_pred + Z_data * treatment_part
-#'
-#' prob_true <- 1 / (1 + exp(-lin_pred))
-#' y_data <- rbinom(N, 1, prob_true)
-#'
-#' # Run the R version of the sampler (will be slow for many iterations)
-#' fit_R <- linked_shrinkage_logistic_gibbs_R(
-#'   y_vec = y_data,
-#'   X_mat = X_data,
-#'   Z_vec = Z_data,
-#'   n_iter = 500,  # Keep low for example
-#'   burn_in = 200,
-#'   seed = 123
-#' )
-#'
-#' # Summarize some results
-#' print(paste("Alpha mean:", mean(fit_R$alpha)))
-#' if (p > 0) {
-#'   print("Beta means:")
-#'   print(colMeans(fit_R$beta))
-#' }
-#' if (length(fit_R$beta_interaction) > 0 && ncol(fit_R$beta_interaction) > 0) {
-#'   print("Beta Interaction means:")
-#'   print(colMeans(fit_R$beta_interaction))
-#' }
-#' plot(fit_R$alpha, type = "l", main = "Trace plot for alpha (R version)")
-#' }
+
 linked_shrinkage_logistic_gibbs_R <- function( # Body of the function as previously provided
   y_vec, X_mat, Z_vec,
   n_iter, burn_in,

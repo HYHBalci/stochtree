@@ -50,17 +50,19 @@ reproducibility. Default is 1848.}
 }
 \value{
 A list containing MCMC samples (after burn-in) for the model parameters:
+\describe{
 \item{alpha}{Numeric vector of samples for the global intercept \code{alpha}.}
-\item{beta}{Numeric matrix of samples for the main prognostic effects \code{beta_vec}. Each row is an iteration, each column corresponds to a covariate in \code{X_mat}.}
-\item{beta_interaction}{Numeric matrix of samples for the prognostic interaction effects \code{beta_interaction_vec} (pairwise interactions of \code{X_mat}). Each row is an iteration. Columns correspond to interaction pairs. Will have 0 columns if no interactions are possible (i.e., \code{ncol(X_mat) < 2}).}
-\item{aleph}{Numeric vector of samples for the intercept \code{aleph} of the treatment-specific modifier.}
-\item{gamma}{Numeric matrix of samples for the coefficients \code{gamma_vec} of Z\emph{X terms. Each row is an iteration.}
-\item{gamma_int}{Numeric matrix of samples for the coefficients \code{gamma_int_vec} of Z}X*X interaction terms. Each row is an iteration. Will have 0 columns if no interactions are possible.}
-\item{tau_j}{Numeric matrix of samples for the local shrinkage parameters \code{tau_j_params_vec} for \code{beta_vec} coefficients.}
-\item{tau_int_fixed_value}{Numeric scalar, the fixed value of \code{tau_int_param} (which is 1.0 in this version).}
-\item{lambda_gamma}{Numeric matrix of samples for the local Horseshoe shrinkage parameters for \code{gamma_vec} coefficients.}
-\item{lambda_g_int}{Numeric matrix of samples for the local Horseshoe shrinkage parameters for \code{gamma_int_vec} coefficients. Will have 0 columns if no interactions are possible.}
-\item{tau_hs_combined}{Numeric vector of samples for the shared global Horseshoe shrinkage parameter for \code{gamma_vec} and \code{gamma_int_vec} coefficients.}
+\item{beta}{Numeric matrix of samples for the main prognostic effects.}
+\item{beta_interaction}{Numeric matrix of samples for prognostic interaction effects.}
+\item{aleph}{Numeric vector of samples for the treatment-specific intercept.}
+\item{gamma}{Numeric matrix of samples for the treatment modifier coefficients.}
+\item{gamma_int}{Numeric matrix of samples for treatment interaction terms.}
+\item{tau_j}{Numeric matrix of samples for local shrinkage parameters.}
+\item{tau_int_fixed_value}{Numeric scalar, fixed value of 1.0.}
+\item{lambda_gamma}{Numeric matrix of samples for local Horseshoe parameters.}
+\item{lambda_g_int}{Numeric matrix of samples for interaction Horseshoe parameters.}
+\item{tau_hs_combined}{Numeric vector of samples for the global Horseshoe parameter.}
+}
 }
 \description{
 Performs MCMC sampling for a Bayesian logistic regression model. This is a
@@ -77,70 +79,4 @@ is fixed at 1.0 in this version.
 This function relies on the \code{BayesLogit} package for Polya-Gamma sampling
 and the \code{MASS} package for multivariate normal sampling. Ensure these are
 installed and listed in your package's DESCRIPTION file if applicable.
-}
-\examples{
-\dontrun{
-# Generate some dummy data
-N <- 100 # Number of observations
-p <- 3   # Number of covariates, keep small for R version speed
-X_data <- matrix(rnorm(N * p), nrow = N, ncol = p)
-colnames(X_data) <- paste0("X", 1:p)
-Z_data <- sample(0:1, N, replace = TRUE)
-
-# True parameters (example)
-true_alpha <- 0.2
-true_beta <- rnorm(p, 0, 0.5)
-true_beta_int_effects <- if (p >= 2) {
-  n_int <- ncol(combn(p, 2))
-  rnorm(n_int, 0, 0.2)
-} else { numeric(0) }
-true_aleph <- 0.5
-true_gamma <- rnorm(p, 0, 0.4)
-true_gamma_int_effects <- if (p >= 2) {
- n_int <- ncol(combn(p, 2))
- rnorm(n_int, 0, 0.1)
-} else { numeric(0) }
-
-# Construct linear predictor
-lin_pred <- true_alpha + X_data \%*\% true_beta
-if (p >= 2) {
-  pairs <- combn(1:p, 2)
-  for (k_int in 1:ncol(pairs)) {
-    lin_pred <- lin_pred + true_beta_int_effects[k_int] * X_data[,pairs[1,k_int]] * X_data[,pairs[2,k_int]]
-  }
-}
-treatment_part <- true_aleph + X_data \%*\% true_gamma
-if (p >= 2) {
-  pairs <- combn(1:p, 2)
-  for (k_int in 1:ncol(pairs)) {
-    treatment_part <- treatment_part + true_gamma_int_effects[k_int] * X_data[,pairs[1,k_int]] * X_data[,pairs[2,k_int]]
-  }
-}
-lin_pred <- lin_pred + Z_data * treatment_part
-
-prob_true <- 1 / (1 + exp(-lin_pred))
-y_data <- rbinom(N, 1, prob_true)
-
-# Run the R version of the sampler (will be slow for many iterations)
-fit_R <- linked_shrinkage_logistic_gibbs_R(
-  y_vec = y_data,
-  X_mat = X_data,
-  Z_vec = Z_data,
-  n_iter = 500,  # Keep low for example
-  burn_in = 200,
-  seed = 123
-)
-
-# Summarize some results
-print(paste("Alpha mean:", mean(fit_R$alpha)))
-if (p > 0) {
-  print("Beta means:")
-  print(colMeans(fit_R$beta))
-}
-if (length(fit_R$beta_interaction) > 0 && ncol(fit_R$beta_interaction) > 0) {
-  print("Beta Interaction means:")
-  print(colMeans(fit_R$beta_interaction))
-}
-plot(fit_R$alpha, type = "l", main = "Trace plot for alpha (R version)")
-}
 }

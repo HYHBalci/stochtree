@@ -36,15 +36,12 @@ Suggests:
     testthat (>= 3.0.0), 
     doParallel, 
     foreach, 
-    ggplot2,
     knitr,
     latex2exp,
     Matrix,
-    MASS,
     mvtnorm,
     rmarkdown,
     tgp
-VignetteBuilder: knitr
 SystemRequirements: C++17
 Imports: 
     R6,
@@ -55,7 +52,11 @@ Imports:
     keras,
     nnet,
     BayesLogit,
-    MASS
+    MASS,
+    forcats,
+    ggplot2,
+    rlang,
+    purrr
 URL: https://stochtree.ai/, https://github.com/StochasticTree/stochtree
 BugReports: https://github.com/StochasticTree/stochtree/issues
 Config/testthat/edition: 3
