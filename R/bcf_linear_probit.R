@@ -1175,7 +1175,8 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
       if (adaptive_coding) {
         # Estimate mu(X) and tau(X) and compute y - mu(X)
         mu_x_raw_train <- active_forest_mu$predict_raw(forest_dataset_train)
-        tau_x_raw_train <- predict_interaction_lm(X_train_raw, c(alpha, beta, beta_int), X_final_var_info)
+        X_for_prediction <- if(propensity_seperate == "tau") X_train else X_train_raw
+        tau_x_raw_train <- predict_interaction_lm(X_for_prediction, c(alpha, beta, beta_int), X_final_var_info)
         partial_resid_mu_train <- resid_train - mu_x_raw_train
         if (has_rfx) {
           rfx_preds_train <- rfx_model$predict(rfx_dataset_train, rfx_tracker_train)
@@ -1621,7 +1622,8 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
         if (adaptive_coding) {
           # Estimate mu(X) and tau(X) and compute y - mu(X)
           mu_x_raw_train <- active_forest_mu$predict_raw(forest_dataset_train)
-          tau_x_raw_train <- active_forest_tau$predict_raw(forest_dataset_train)
+          X_for_prediction <- if(propensity_seperate == "tau") X_train else X_train_raw
+          tau_x_raw_train <- predict_interaction_lm(X_for_prediction, c(alpha, beta, beta_int), X_final_var_info)
           partial_resid_mu_train <- resid_train - mu_x_raw_train
           if (has_rfx) {
             rfx_preds_train <- rfx_model$predict(rfx_dataset_train, rfx_tracker_train)
@@ -1994,7 +1996,19 @@ predict_linear_bcf <- function(object, X, Z, propensity = NULL, rfx_group_ids = 
   
   # Prognostic Forest (Mu)
   mu_hat <- object$forests_mu$predict(forest_dataset_pred) * y_std + y_bar
-  
+  if (!is.null(object$model_params$adaptive_coding) && object$model_params$adaptive_coding) {
+    # Check if samples exist (they should, but good to be safe)
+    if (!is.null(object$b_1_samples) && !is.null(object$b_0_samples)) {
+      b1_mean <- mean(object$b_1_samples, na.rm = TRUE)
+      b0_mean <- mean(object$b_0_samples, na.rm = TRUE)
+      scale_factor <- (b1_mean - b0_mean)
+    } else {
+      warning("Adaptive coding was enabled but b_0/b_1 samples are missing. Using scale factor of 1.")
+      scale_factor <- 1
+    }
+  } else {
+    scale_factor <- 1
+  }
   # 7. Finalize Treatment Effect (Tau)
   # Since there is no Tau forest, the Total Tau is just the Linear Tau
   if (object$model_params$standardize) {
