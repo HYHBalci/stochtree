@@ -1176,7 +1176,7 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
         # Estimate mu(X) and tau(X) and compute y - mu(X)
         mu_x_raw_train <- active_forest_mu$predict_raw(forest_dataset_train)
         X_for_prediction <- if(propensity_seperate == "tau") X_train else X_train_raw
-        tau_x_raw_train <- predict_interaction_lm(X_for_prediction, c(alpha, beta, beta_int), X_final_var_info)
+        tau_x_raw_train <- as.vector(as.matrix(full_design_matrix_train) %*% c(alpha, beta, beta_int))
         partial_resid_mu_train <- resid_train - mu_x_raw_train
         if (has_rfx) {
           rfx_preds_train <- rfx_model$predict(rfx_dataset_train, rfx_tracker_train)
@@ -1274,7 +1274,6 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
             tau_basis_test <- (1-Z_test)*current_b_0 + Z_test*current_b_1
             forest_dataset_test$update_basis(tau_basis_test)
           }
-          forest_model_tau$propagate_basis_update(forest_dataset_train, outcome_train, active_forest_tau)
         }
         if (sample_sigma2_global) {
           current_sigma2 <- global_var_samples[forest_ind + 1]
@@ -1312,7 +1311,6 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
             tau_basis_test <- (1-Z_test)*current_b_0 + Z_test*current_b_1
             forest_dataset_test$update_basis(tau_basis_test)
           }
-          forest_model_tau$propagate_basis_update(forest_dataset_train, outcome_train, active_forest_tau)
         }
         if (has_rfx) {
           if (is.null(previous_rfx_samples)) {
@@ -1623,7 +1621,7 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           # Estimate mu(X) and tau(X) and compute y - mu(X)
           mu_x_raw_train <- active_forest_mu$predict_raw(forest_dataset_train)
           X_for_prediction <- if(propensity_seperate == "tau") X_train else X_train_raw
-          tau_x_raw_train <- predict_interaction_lm(X_for_prediction, c(alpha, beta, beta_int), X_final_var_info)
+          tau_x_raw_train <- as.vector(as.matrix(full_design_matrix_train) %*% c(alpha, beta, beta_int))
           partial_resid_mu_train <- resid_train - mu_x_raw_train
           if (has_rfx) {
             rfx_preds_train <- rfx_model$predict(rfx_dataset_train, rfx_tracker_train)
@@ -1711,12 +1709,13 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
   # Forest predictions
   mu_hat_train <- forest_samples_mu$predict(forest_dataset_train)*y_std_train + y_bar_train
   if (adaptive_coding) {
-    # tau_hat_train_raw <- forest_samples_tau$predict_raw(forest_dataset_train)
-    # tau_hat_train <- t(t(tau_hat_train_raw) * (b_1_samples - b_0_samples))*y_std_train
+    tau_hat_train_raw <- as.vector(as.matrix(full_design_matrix_train) %*% c(alpha, beta, beta_int))
+    tau_hat_train <- t(t(tau_hat_train_raw) * (b_1_samples - b_0_samples))*y_std_train
   } else {
-    tau_hat_train <- forest_samples_tau$predict_raw(forest_dataset_train)*y_std_train
+    tau_x_raw_train <- as.vector(as.matrix(full_design_matrix_train) %*% c(alpha, beta, beta_int))
+    tau_hat_train <- tau_x_raw_train
   }
-  y_hat_train <- mu_hat_train + predict_interaction_lm(if(propensity_seperate == "tau") X_train else X_train_raw, c(alpha, beta, beta_int), X_final_var_info, interaction_rule, propensity_seperate) * as.numeric(Z_train)
+  y_hat_train <- mu_hat_train + as.vector(as.matrix(full_design_matrix_train) %*% c(alpha, beta, beta_int))* as.numeric(Z_train)
   if (has_test) {
     mu_hat_test <- forest_samples_mu$predict(forest_dataset_test)*y_std_train + y_bar_train
     if (adaptive_coding) {
