@@ -9,6 +9,7 @@
 #include <Eigen/Cholesky>
 #include <Rmath.h>
 #include <fstream>
+#include <R_ext/Random.h>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -156,6 +157,8 @@ writable::list updateLinearTreatmentCpp_cpp(
     bool regularize_ATE,
     double hn_scale,
     bool use_prognostic_shapley) {
+  
+  GetRNGstate();
   
   int n = residual.size();
   int p_mod = X.ncol();
@@ -438,6 +441,8 @@ writable::list updateLinearTreatmentCpp_cpp(
     save_output_vector_labeled(outfile, alpha, tau_int, tau_glob, xi, sigma, beta, beta_int, tau_beta, nu, index);
     outfile.close();
   }
+  
+  PutRNGstate();
   return writable::list({
     "params"_nm = params_out,
       "residuals"_nm = residuals_out
@@ -482,6 +487,7 @@ writable::doubles updateLinearTreatmentCpp_NCP_cpp(
     double hn_scale,
     bool use_prognostic_shapley) {
   
+  GetRNGstate();
   int n = residual.size();
   int p_mod = X.ncol();
   int p_prog = use_prognostic_shapley ? Phi.ncol() : 0; 
@@ -686,7 +692,7 @@ writable::doubles updateLinearTreatmentCpp_NCP_cpp(
   output.push_back(tau_glob);
   output.push_back(gamma_prop);
   output.push_back(xi);
-  
+  PutRNGstate();
   for (double val : beta_tilde) output.push_back(val);
   for (double val : beta_int_tilde) output.push_back(val);
   for (double val : gamma_tilde) output.push_back(val);

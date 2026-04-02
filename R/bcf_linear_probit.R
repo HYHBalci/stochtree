@@ -69,7 +69,6 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
   general_params_updated <- preprocessParams(
     general_params_default, general_params
   )
-  
   ####
   rinvgamma <- function(shape, scale){
     if (shape <= 0.0 || scale <= 0.0) {
@@ -294,6 +293,7 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
   b_1 <- general_params_updated$treated_coding_init
   rfx_prior_var <- general_params_updated$rfx_prior_var
   random_seed <- general_params_updated$random_seed
+  set.seed(random_seed)
   keep_burnin <- general_params_updated$keep_burnin
   keep_gfr <- general_params_updated$keep_gfr
   keep_every <- general_params_updated$keep_every
@@ -1175,7 +1175,6 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
       if (adaptive_coding) {
         # Estimate mu(X) and tau(X) and compute y - mu(X)
         mu_x_raw_train <- active_forest_mu$predict_raw(forest_dataset_train)
-        X_for_prediction <- if(propensity_seperate == "tau") X_train else X_train_raw
         tau_x_raw_train <- as.vector(as.matrix(full_design_matrix_train) %*% c(alpha, beta, beta_int))
         partial_resid_mu_train <- resid_train - mu_x_raw_train
         if (has_rfx) {
