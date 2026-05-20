@@ -26,4 +26,5 @@ OBJECTS = \
     tree.o \
     horseshoe_samplers.o \
     horseshoe_samplers_old.o \
+    chisel_step.o \
     shapley.o

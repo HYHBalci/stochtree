@@ -1,7 +1,7 @@
-#' Fit a Restricted BCF Model (Constant Treatment Effect) and Compute Score Test P-Values
+#' Fit a Restricted BCF Model and Compute Posterior Predictive Check for Skewness
 #'
 #' @param X_train Covariates used to split trees in the ensemble.
-#' @param Z_train Vector of treatment assignments.
+#' @param Z_train Vector of treatment assignments (must be 0 or 1).
 #' @param y_train Outcome to be modeled by the ensemble.
 #' @param propensity_train (Optional) Vector of propensity scores.
 #' @param rfx_group_ids_train (Optional) Group labels used for an additive random effects model.
@@ -9,21 +9,26 @@
 #' @param num_gfr Number of "warm-start" iterations. Default: 5.
 #' @param num_burnin Number of "burn-in" iterations. Default: 100.
 #' @param num_mcmc Number of "retained" iterations. Default: 500.
-#' @param use_rao_blackwell Logical. If TRUE, averages the score vector and covariance matrix across MCMC draws to compute a single optimal P-value. Default: TRUE.
 #' @param general_params (Optional) A list of general model parameters.
 #' @param prognostic_forest_params (Optional) A list of prognostic forest model parameters.
 #' @param variance_forest_params (Optional) A list of variance forest model parameters.
-#' @return A list of class `bcfscoretest` containing posterior samples and score test P-values.
+#' @return A list containing posterior samples of the PPC Skewness statistics.
 #' @export
-bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_train = NULL, 
-                                      rfx_group_ids_train = NULL, rfx_basis_train = NULL, 
-                                      num_gfr = 5, num_burnin = 100, num_mcmc = 500, 
-                                      use_rao_blackwell = TRUE,
-                                      general_params = list(), prognostic_forest_params = list(), 
-                                      variance_forest_params = list()) {
+bcf_restricted_skewness_ppc <- function(X_train, Z_train, y_train, propensity_train = NULL, 
+                                        rfx_group_ids_train = NULL, rfx_basis_train = NULL, 
+                                        num_gfr = 5, num_burnin = 100, num_mcmc = 500, 
+                                        general_params = list(), prognostic_forest_params = list(), 
+                                        variance_forest_params = list()) {
   
-  if (!requireNamespace("mvtnorm", quietly = TRUE)) stop("Package 'mvtnorm' is required.")
-  if (!requireNamespace("MASS", quietly = TRUE)) stop("Package 'MASS' is required.")
+  # Helper function to calculate skewness
+  calc_skewness <- function(x) {
+    n_x <- length(x)
+    if (n_x < 3) return(0)
+    mu_x <- mean(x)
+    m2 <- sum((x - mu_x)^2) / n_x
+    m3 <- sum((x - mu_x)^3) / n_x
+    return(m3 / (m2^(1.5)))
+  }
   
   general_params_default <- list(
     cutpoint_grid_size = 100, standardize = TRUE, sample_sigma2_global = TRUE, sigma2_global_init = NULL, 
@@ -39,7 +44,7 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
     return(1.0 / rgamma(1, shape, scale))
   }
   
-  if(general_params_updated$verbose) print("Pre-Processing data for Score Test!")
+  if(general_params_updated$verbose) print("Pre-Processing data for Skewness PPC!")
   
   handled_data_list <- standardize_X_by_index(X_train, process_data = general_params_updated$standardize_cov, 
                                               interaction_rule = general_params_updated$interaction_rule, 
@@ -57,6 +62,10 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
   n <- nrow(X_train_forest)
   num_cov_orig <- ncol(X_train_forest)
   
+  # Identify treated and control cohorts for skewness check
+  idx_trt <- Z_train == 1
+  idx_ctl <- Z_train == 0
+  
   internal_propensity_model <- FALSE
   if (is.null(propensity_train) && general_params_updated$propensity_covariate != "none") {
     internal_propensity_model <- TRUE
@@ -68,72 +77,15 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
   if(is.null(propensity_train)) propensity_train <- rep(mean(Z_train), n)
   propensity_train <- as.matrix(propensity_train)
   
-  # Center treatment indicator
   Z_cen <- Z_train - as.vector(propensity_train)
-  
-  # =====================================================================
-  # SCORE TEST DESIGN MATRIX (Linear + Permitted Interactions)
-  # =====================================================================
-  sd_X <- apply(X_train_raw, 2, sd)
-  valid_cols <- sd_X > 1e-6
-  
-  X_linear <- scale(X_train_raw[, valid_cols, drop = FALSE], center = TRUE, scale = TRUE)
-  
-  is_cont <- as.logical(as.numeric(X_train_metadata_init$is_continuous))
-  is_bin <- as.logical(as.numeric(X_train_metadata_init$is_binary))
-  
-  interaction_rule <- general_params_updated$interaction_rule
-  if (interaction_rule == "continuous") {
-    is_candidate <- is_cont
-  } else if (interaction_rule == "continuous_or_binary") {
-    is_candidate <- is_cont | is_bin
-  } else {
-    is_candidate <- rep(TRUE, ncol(X_train_raw))
-  }
-  
-  interaction_list <- list()
-  num_covariates <- ncol(X_train_raw)
-  if (num_covariates > 1) {
-    for (j in 1:(num_covariates - 1)) {
-      for (k in (j + 1):num_covariates) {
-        if (is_candidate[j] || is_candidate[k]) {
-          interaction_list[[length(interaction_list) + 1]] <- c(j, k)
-        }
-      }
-    }
-  }
-  
-  if (length(interaction_list) > 0) {
-    ipairs <- do.call(cbind, interaction_list)
-    X_interactions <- matrix(0, nrow = n, ncol = ncol(ipairs))
-    for (idx in 1:ncol(ipairs)) {
-      X_interactions[, idx] <- X_train_raw[, ipairs[1, idx]] * X_train_raw[, ipairs[2, idx]]
-    }
-    X_interactions <- scale(X_interactions, center = TRUE, scale = TRUE)
-    valid_int <- apply(X_interactions, 2, sd, na.rm = TRUE) > 1e-6
-    X_interactions <- X_interactions[, valid_int, drop = FALSE]
-  } else {
-    X_interactions <- NULL
-  }
-  
-  X_cen <- cbind(X_linear, X_interactions)
-  p_valid <- ncol(X_cen)
-  # =====================================================================
   
   num_chains <- general_params_updated$num_chains
   alpha_samples <- matrix(0, nrow = num_chains, ncol = num_mcmc)
   sigma2_samples <- matrix(0, nrow = num_chains, ncol = num_mcmc)
   
-  # Storage setup depends on whether Rao-Blackwellization is used
-  if (use_rao_blackwell) {
-    T_vec_sum <- matrix(0, nrow = num_chains, ncol = p_valid)
-    Var_T_sum <- array(0, dim = c(num_chains, p_valid, p_valid))
-    pval_max_samples <- NULL
-    pval_quad_samples <- NULL
-  } else {
-    pval_max_samples <- matrix(0, nrow = num_chains, ncol = num_mcmc)
-    pval_quad_samples <- matrix(0, nrow = num_chains, ncol = num_mcmc)
-  }
+  # Storage for PPC Skewness Test Statistics
+  T_obs_samples <- matrix(0, nrow = num_chains, ncol = num_mcmc)
+  T_rep_samples <- matrix(0, nrow = num_chains, ncol = num_mcmc)
   
   alpha_prior_var <- 100.0
   
@@ -164,16 +116,31 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
   sample_sigma2_leaf_mu <- prognostic_forest_params_updated$sample_sigma2_leaf
   a_leaf_mu <- prognostic_forest_params_updated$sigma2_leaf_shape
   b_leaf_mu <- prognostic_forest_params_updated$sigma2_leaf_scale
+  keep_vars_mu <- prognostic_forest_params_updated$keep_vars
+  drop_vars_mu <- prognostic_forest_params_updated$drop_vars
   
   num_trees_variance <- variance_forest_params_updated$num_trees
   include_variance_forest <- num_trees_variance > 0
   variance_forest_init <- variance_forest_params_updated$variance_forest_init
   
-  variable_weights <- rep(1/ncol(X_train_raw), ncol(X_train_raw))
+  variable_weights <- general_params_updated$variable_weights
+  if (is.null(variable_weights)) variable_weights <- rep(1/ncol(X_train_raw), ncol(X_train_raw))
+  
+  if (!is.null(keep_vars_mu)) {
+    if (is.character(keep_vars_mu)) variable_subset_mu <- unname(which(names(X_train_raw) %in% keep_vars_mu))
+    else variable_subset_mu <- keep_vars_mu
+  } else if (!is.null(drop_vars_mu)) {
+    if (is.character(drop_vars_mu)) variable_subset_mu <- unname(which(!(names(X_train_raw) %in% drop_vars_mu)))
+    else variable_subset_mu <- (1:ncol(X_train_raw))[!(1:ncol(X_train_raw) %in% drop_vars_mu)]
+  } else {
+    variable_subset_mu <- 1:ncol(X_train_raw)
+  }
+  
   variable_weights_adj <- 1/sapply(original_var_indices, function(x) sum(original_var_indices == x))
   variable_weights <- variable_weights[original_var_indices]*variable_weights_adj
   
   variable_weights_variance <- variable_weights_mu <- variable_weights
+  variable_weights_mu[!(original_var_indices %in% variable_subset_mu)] <- 0
   
   if (general_params_updated$propensity_covariate %in% c("mu", "both")) {
     feature_types <- as.integer(c(feature_types, rep(0, ncol(propensity_train))))
@@ -182,22 +149,55 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
     if(include_variance_forest) variable_weights_variance <- c(variable_weights_variance, rep(0, ncol(propensity_train)))
   }
   variable_weights_mu <- variable_weights_mu / sum(variable_weights_mu)
+  if(include_variance_forest) variable_weights_variance <- variable_weights_variance / sum(variable_weights_variance)
   
-  if (standardize) {
-    y_bar_train <- mean(y_train)
-    y_std_train <- sd(y_train)
-  } else {
-    y_bar_train <- 0
+  if (probit_outcome_model) {
+    y_bar_train <- qnorm(mean(y_train))
     y_std_train <- 1
+    resid_train_base <- y_train - mean(y_train)
+    init_mu <- 0.0
+    current_sigma2_init <- 1.0
+    sigma2_leaf_mu <- 2/(num_trees_mu)
+  } else {
+    if (standardize) {
+      y_bar_train <- mean(y_train)
+      y_std_train <- sd(y_train)
+    } else {
+      y_bar_train <- 0
+      y_std_train <- 1
+    }
+    resid_train_base <- (y_train - y_bar_train) / y_std_train
+    init_mu <- mean(resid_train_base)
+    current_sigma2_init <- general_params_updated$sigma2_global_init %||% (1.0 * var(resid_train_base))
+    if (is.null(variance_forest_init)) variance_forest_init <- 1.0 * var(resid_train_base)
+    if (is.null(b_leaf_mu)) b_leaf_mu <- var(resid_train_base) / (num_trees_mu)
+    sigma2_leaf_mu <- prognostic_forest_params_updated$sigma2_leaf_init %||% (2.0 * var(resid_train_base) / num_trees_mu)
   }
-  resid_train_base <- (y_train - y_bar_train) / y_std_train
-  init_mu <- mean(resid_train_base)
-  current_sigma2_init <- general_params_updated$sigma2_global_init %||% (1.0 * var(resid_train_base))
-  if (is.null(b_leaf_mu)) b_leaf_mu <- var(resid_train_base) / (num_trees_mu)
-  sigma2_leaf_mu <- prognostic_forest_params_updated$sigma2_leaf_init %||% (2.0 * var(resid_train_base) / num_trees_mu)
   current_leaf_scale_mu <- as.matrix(sigma2_leaf_mu)
   
+  has_rfx <- !is.null(rfx_group_ids_train)
+  if (has_rfx) {
+    if (is.null(rfx_basis_train)) rfx_basis_train <- matrix(1, nrow = n, ncol = 1)
+    group_ids_factor <- factor(rfx_group_ids_train)
+    rfx_group_ids_train <- as.integer(group_ids_factor)
+    num_rfx_groups <- length(unique(rfx_group_ids_train))
+    num_rfx_components <- ncol(rfx_basis_train)
+    
+    rfx_dataset_train <- createRandomEffectsDataset(rfx_group_ids_train, rfx_basis_train)
+    rfx_tracker_train <- createRandomEffectsTracker(rfx_group_ids_train)
+    rfx_model <- createRandomEffectsModel(num_rfx_components, num_rfx_groups)
+    rfx_samples <- createRandomEffectSamples(num_rfx_components, num_rfx_groups, rfx_tracker_train)
+    
+    xi_init <- matrix(0, num_rfx_components, num_rfx_groups)
+    for (i in 1:num_rfx_groups) {
+      group_subset_indices <- rfx_group_ids_train == i
+      rfx_group_model <- lm(resid_train_base[group_subset_indices] ~ 0 + rfx_basis_train[group_subset_indices,])
+      xi_init[,i] <- unname(coef(rfx_group_model))
+    }
+  }
+  
   num_samples <- num_gfr + num_burnin + num_mcmc
+  sample_counter <- 0
   
   # =====================================================================
   # MAIN SAMPLER LOOP
@@ -226,6 +226,13 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
     active_forest_mu$prepare_for_sampler(forest_dataset_train, outcome_train, forest_model_mu, 0, init_mu)
     active_forest_mu$adjust_residual(forest_dataset_train, outcome_train, forest_model_mu, FALSE, FALSE)
     
+    if (has_rfx) {
+      rfx_model$set_working_parameter(rep(1, num_rfx_components))
+      rfx_model$set_group_parameters(xi_init)
+      rfx_model$set_working_parameter_cov(diag(1, num_rfx_components))
+      rfx_model$set_group_parameter_cov(diag(general_params_updated$rfx_prior_var %||% 1, num_rfx_components))
+    }
+    
     for (i in 1:num_samples) {
       is_mcmc <- i > (num_gfr + num_burnin)
       is_gfr <- i <= num_gfr
@@ -249,7 +256,9 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
       }
       
       mu_x_raw_train <- active_forest_mu$predict_raw(forest_dataset_train)
-      r_alpha <- resid_train - mu_x_raw_train
+      rfx_preds <- if (has_rfx) rfx_model$predict(rfx_dataset_train, rfx_tracker_train) else 0
+      
+      r_alpha <- resid_train - mu_x_raw_train - rfx_preds
       
       var_alpha <- 1.0 / (sum(Z_cen^2) / current_sigma2 + 1.0 / alpha_prior_var)
       mean_alpha <- var_alpha * sum(r_alpha * Z_cen) / current_sigma2
@@ -258,15 +267,19 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
       resid_full <- r_alpha - alpha * Z_cen
       outcome_train$update_data(resid_full)
       
-      if (sample_sigma2_global) {
+      if (sample_sigma2_global && !probit_outcome_model) {
         shape_sigma_post <- 0.001 + n / 2
         rate_sigma_post <- 0.001 + 0.5 * sum(outcome_train$get_data()^2)
         current_sigma2 <- max(rinvgamma(shape_sigma_post, rate_sigma_post), 1e-9)
         global_model_config$update_global_error_variance(current_sigma2)
       }
       
+      if (has_rfx) {
+        rfx_model$sample_random_effect(rfx_dataset_train, outcome_train, rfx_tracker_train, rfx_samples, is_mcmc, current_sigma2, rng)
+      }
+      
       # =====================================================================
-      # SCORE TEST INJECTION
+      # PPC SKEWNESS INJECTION (MCMC Only)
       # =====================================================================
       if (is_mcmc) {
         mcmc_counter <- i - num_gfr - num_burnin
@@ -274,68 +287,21 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
         alpha_samples[chain_num, mcmc_counter] <- alpha
         sigma2_samples[chain_num, mcmc_counter] <- current_sigma2
         
-        # 1. Calculate Score Residuals
-        s_i <- resid_full * Z_cen
-        s_i_cen <- s_i - mean(s_i)
+        # 1. Calculate Observed Test Statistic (Difference in Skewness)
+        # Using resid_full which contains the scaled errors for the real data
+        T_obs <- calc_skewness(resid_full[idx_trt]) - calc_skewness(resid_full[idx_ctl])
         
-        # 2. Linear Permutation Statistic
-        T_vec <- t(X_cen) %*% s_i_cen
+        # 2. Simulate Replicated Data (Assuming Constant Treatment Effect & Normality)
+        # We simply draw n new residuals from the model's posterior variance
+        resid_rep <- rnorm(n, mean = 0, sd = sqrt(current_sigma2))
         
-        # 3. Robust Covariance
-        X_s <- X_cen * as.vector(s_i_cen)
-        Var_T <- crossprod(X_s)
+        # 3. Calculate Replicated Test Statistic
+        T_rep <- calc_skewness(resid_rep[idx_trt]) - calc_skewness(resid_rep[idx_ctl])
         
-        if (use_rao_blackwell) {
-          # Accumulate components instead of computing noisy P-values
-          T_vec_sum[chain_num, ] <- T_vec_sum[chain_num, ] + as.numeric(T_vec)
-          Var_T_sum[chain_num, , ] <- Var_T_sum[chain_num, , ] + Var_T
-        } else {
-          # Legacy method: P-values at every draw
-          Var_T_inv <- MASS::ginv(Var_T)
-          T_quad <- as.numeric(t(T_vec) %*% Var_T_inv %*% T_vec)
-          pval_quad_samples[chain_num, mcmc_counter] <- pchisq(T_quad, df = p_valid, lower.tail = FALSE)
-          
-          inv_sd_T <- 1 / sqrt(diag(Var_T))
-          Cor_T <- diag(inv_sd_T) %*% Var_T %*% diag(inv_sd_T)
-          
-          Z_vec <- as.numeric(T_vec * inv_sd_T)
-          max_Z <- max(abs(Z_vec))
-          
-          prob_inside <- tryCatch({
-            mvtnorm::pmvnorm(lower = rep(-max_Z, p_valid), upper = rep(max_Z, p_valid), sigma = Cor_T)[1]
-          }, error = function(e) max(0, 1 - (p_valid * 2 * pnorm(-max_Z))))
-          pval_max_samples[chain_num, mcmc_counter] <- 1 - prob_inside
-        }
+        # 4. Store samples
+        T_obs_samples[chain_num, mcmc_counter] <- T_obs
+        T_rep_samples[chain_num, mcmc_counter] <- T_rep
       }
-    }
-  }
-  
-  # =====================================================================
-  # POST-PROCESSING FOR RAO-BLACKWELLIZATION
-  # =====================================================================
-  if (use_rao_blackwell) {
-    rb_pval_quad <- numeric(num_chains)
-    rb_pval_max <- numeric(num_chains)
-    
-    for (c in 1:num_chains) {
-      T_vec_mean <- T_vec_sum[c, ] / num_mcmc
-      Var_T_mean <- Var_T_sum[c, , ] / num_mcmc
-      
-      Var_T_mean_inv <- MASS::ginv(Var_T_mean)
-      T_quad <- as.numeric(t(T_vec_mean) %*% Var_T_mean_inv %*% T_vec_mean)
-      rb_pval_quad[c] <- pchisq(T_quad, df = p_valid, lower.tail = FALSE)
-      
-      inv_sd_T <- 1 / sqrt(diag(Var_T_mean))
-      Cor_T <- diag(inv_sd_T) %*% Var_T_mean %*% diag(inv_sd_T)
-      
-      Z_vec <- as.numeric(T_vec_mean * inv_sd_T)
-      max_Z <- max(abs(Z_vec))
-      
-      prob_inside <- tryCatch({
-        mvtnorm::pmvnorm(lower = rep(-max_Z, p_valid), upper = rep(max_Z, p_valid), sigma = Cor_T)[1]
-      }, error = function(e) max(0, 1 - (p_valid * 2 * pnorm(-max_Z))))
-      
-      rb_pval_max[c] <- 1 - prob_inside
     }
   }
   
@@ -345,18 +311,11 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
     "model_params" = general_params_updated,
     "alpha_samples" = alpha_samples,
     "sigma2_samples" = sigma2_samples,
-    "mu_hat_train" = mu_hat_train,
-    "train_set_metadata" = X_train_metadata
+    "T_obs" = T_obs_samples,
+    "T_rep" = T_rep_samples,
+    "mu_hat_train" = mu_hat_train
   )
   
-  if (use_rao_blackwell) {
-    result[["rb_pval_quad"]] <- rb_pval_quad
-    result[["rb_pval_max"]] <- rb_pval_max
-  } else {
-    result[["pval_max_samples"]] <- pval_max_samples
-    result[["pval_quad_samples"]] <- pval_quad_samples
-  }
-  
-  class(result) <- "bcfscoretest"
+  class(result) <- "bcfppc"
   return(result)
 }

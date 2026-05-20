@@ -435,6 +435,13 @@ extern "C" SEXP _stochtree_root_reset_rfx_tracker_cpp(SEXP tracker, SEXP dataset
     return R_NilValue;
   END_CPP11
 }
+// chisel_step.cpp
+writable::list horseshoe_probit_step_cpp(const doubles_matrix<>& X, const integers& y_star, const doubles& weights, const doubles& beta_in, const doubles& lambda_sq_in, double tau_sq, const doubles& nu_in, double xi);
+extern "C" SEXP _stochtree_horseshoe_probit_step_cpp(SEXP X, SEXP y_star, SEXP weights, SEXP beta_in, SEXP lambda_sq_in, SEXP tau_sq, SEXP nu_in, SEXP xi) {
+  BEGIN_CPP11
+    return cpp11::as_sexp(horseshoe_probit_step_cpp(cpp11::as_cpp<cpp11::decay_t<const doubles_matrix<>&>>(X), cpp11::as_cpp<cpp11::decay_t<const integers&>>(y_star), cpp11::as_cpp<cpp11::decay_t<const doubles&>>(weights), cpp11::as_cpp<cpp11::decay_t<const doubles&>>(beta_in), cpp11::as_cpp<cpp11::decay_t<const doubles&>>(lambda_sq_in), cpp11::as_cpp<cpp11::decay_t<double>>(tau_sq), cpp11::as_cpp<cpp11::decay_t<const doubles&>>(nu_in), cpp11::as_cpp<cpp11::decay_t<double>>(xi)));
+  END_CPP11
+}
 // forest.cpp
 cpp11::external_pointer<StochTree::TreeEnsemble> active_forest_cpp(int num_trees, int output_dimension, bool is_leaf_constant, bool is_exponentiated);
 extern "C" SEXP _stochtree_active_forest_cpp(SEXP num_trees, SEXP output_dimension, SEXP is_leaf_constant, SEXP is_exponentiated) {
@@ -1528,6 +1535,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_stochtree_get_tree_leaves_forest_container_cpp",                (DL_FUNC) &_stochtree_get_tree_leaves_forest_container_cpp,                 3},
     {"_stochtree_get_tree_split_counts_active_forest_cpp",             (DL_FUNC) &_stochtree_get_tree_split_counts_active_forest_cpp,              3},
     {"_stochtree_get_tree_split_counts_forest_container_cpp",          (DL_FUNC) &_stochtree_get_tree_split_counts_forest_container_cpp,           4},
+    {"_stochtree_horseshoe_probit_step_cpp",                           (DL_FUNC) &_stochtree_horseshoe_probit_step_cpp,                            8},
     {"_stochtree_init_json_cpp",                                       (DL_FUNC) &_stochtree_init_json_cpp,                                        0},
     {"_stochtree_initialize_forest_model_active_forest_cpp",           (DL_FUNC) &_stochtree_initialize_forest_model_active_forest_cpp,            6},
     {"_stochtree_initialize_forest_model_cpp",                         (DL_FUNC) &_stochtree_initialize_forest_model_cpp,                          6},
