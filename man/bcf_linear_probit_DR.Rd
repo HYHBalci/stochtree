@@ -85,7 +85,7 @@ that were not in the training set.}
 \item \code{control_coding_init} Initial value of the "control" group coding parameter. This is ignored when Z is not binary. Default: \code{-0.5}.
 \item \code{treated_coding_init} Initial value of the "treatment" group coding parameter. This is ignored when Z is not binary. Default: \code{0.5}.
 \item \code{rfx_prior_var} Prior on the (diagonals of the) covariance of the additive group-level random regression coefficients. Must be a vector of length \code{ncol(rfx_basis_train)}. Default: \code{rep(1, ncol(rfx_basis_train))}
-\item \code{random_seed} Integer parameterizing the C++ random number generator. If not specified, the C++ random number generator is seeded according to \code{std::random_device}.
+\item \code{random_seed} Integer parameterizing the C++ random number generator. If not specified, it will be drawn from R's random number generator to ensure reproducibility.
 \item \code{keep_burnin} Whether or not "burnin" samples should be included in the stored samples of forests and other parameters. Default \code{FALSE}. Ignored if \code{num_mcmc = 0}.
 \item \code{keep_gfr} Whether or not "grow-from-root" samples should be included in the stored samples of forests and other parameters. Default \code{FALSE}. Ignored if \code{num_mcmc = 0}.
 \item \code{keep_every} How many iterations of the burned-in MCMC sampler should be run before forests and parameters are retained. Default \code{1}. Setting \code{keep_every <- k} for some \code{k > 1} will "thin" the MCMC samples by retaining every \code{k}-th sample, rather than simply every sample. This can reduce the autocorrelation of the MCMC samples.

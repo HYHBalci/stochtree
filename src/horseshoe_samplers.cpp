@@ -704,3 +704,398 @@ writable::doubles updateLinearTreatmentCpp_NCP_cpp(
   
   return output;
 }
+
+// -----------------------------------------------------------------------------
+// SECTION: LTR CAUSAL SCORECARD SAMPLERS
+// -----------------------------------------------------------------------------
+
+// Helper for PG(1, z) exact sample using truncated Gamma sum
+// Optimized: truncates at k=20 and adds the exact expectation of the remaining terms
+double sample_pg1_cpp(double z) {
+    double z_sq_half = (z * z) / 2.0;
+    double sum = 0.0;
+    constexpr double PI2_2 = 2.0 * M_PI * M_PI;
+    
+    // Sum first 20 terms
+    for (int k = 1; k <= 20; ++k) {
+        double e = Rf_rexp(1.0);
+        double k_half = k - 0.5;
+        double d = PI2_2 * k_half * k_half + z_sq_half;
+        sum += e / d;
+    }
+    
+    // Add expected value of the tail
+    double x = 20.5;
+    if (z_sq_half < 1e-8) {
+        sum += 1.0 / (PI2_2 * x);
+    } else {
+        double a = std::sqrt(PI2_2);
+        double b = std::sqrt(z_sq_half);
+        sum += (1.0 / (a * b)) * (M_PI / 2.0 - std::atan(a * x / b));
+    }
+    
+    return sum;
+}
+
+[[cpp11::register]]
+writable::list run_ltr_mse_cpp(
+    const doubles& tau_tilde,
+    const doubles_matrix<>& X,
+    const integers& are_continuous,
+    int M,
+    double epsilon,
+    const doubles& beta_init,
+    const doubles& beta_int_init,
+    const doubles& tau_beta_init,
+    const doubles& nu_init,
+    double tau_int_init,
+    double tau_glob_init,
+    double xi_init,
+    double sigma2_rank_init,
+    bool unlink,
+    int n_iter,
+    int burn_in
+) {
+    GetRNGstate();
+    int N = tau_tilde.size();
+    int P_main = X.ncol();
+    
+    std::vector<std::pair<int, int>> int_pairs;
+    for (int i = 0; i < P_main; i++) {
+        for (int j = i + 1; j < P_main; j++) {
+            if ((are_continuous[i] == 1) || (are_continuous[j] == 1)) {
+                int_pairs.push_back({i, j});
+            }
+        }
+    }
+    int P_int = int_pairs.size();
+    int P_combined = P_main + P_int;
+    
+    // Map data
+    Eigen::Map<const Eigen::VectorXd> tau_map((const double*)tau_tilde.data(), N);
+    Eigen::Map<const Eigen::MatrixXd> X_map((const double*)X.data(), N, P_main);
+    
+    // State variables
+    Eigen::VectorXd beta(P_combined);
+    for(int j=0; j<P_main; ++j) beta(j) = beta_init[j];
+    for(int k=0; k<P_int; ++k) beta(P_main + k) = beta_int_init[k];
+    
+    std::vector<double> tau_beta(P_combined);
+    std::vector<double> nu(P_combined);
+    for(int j=0; j<P_combined; ++j) {
+        tau_beta[j] = tau_beta_init[j];
+        nu[j] = nu_init[j];
+    }
+    double tau_int = tau_int_init;
+    double tau_glob = tau_glob_init;
+    double xi = xi_init;
+    double sigma2_rank = sigma2_rank_init;
+    
+    // Output containers
+    int n_save = n_iter;
+    writable::doubles_matrix<> out_beta(n_save, P_combined);
+    writable::doubles_matrix<> out_tau_beta(n_save, P_combined);
+    writable::doubles out_sigma2(n_save);
+    writable::doubles out_tau_glob(n_save);
+    
+    // Find valid pairs
+    std::vector<std::pair<int, int>> valid_pairs;
+    for (int i = 0; i < N; ++i) {
+        for (int j = 0; j < N; ++j) {
+            if (tau_tilde[i] > tau_tilde[j] + epsilon) {
+                valid_pairs.push_back({i, j});
+            }
+        }
+    }
+    if (valid_pairs.empty()) {
+        PutRNGstate();
+        cpp11::stop("No valid pairs found with the given epsilon.");
+    }
+    
+    int total_iter = burn_in + n_iter;
+    for (int iter = 0; iter < total_iter; ++iter) {
+        // 1. Construct mini-batch
+        int actual_M = std::min(M, (int)valid_pairs.size());
+        Eigen::MatrixXd X_diff(actual_M, P_combined);
+        Eigen::VectorXd Omega(actual_M);
+        
+        for (int m = 0; m < actual_M; ++m) {
+            int idx = floor(Rf_runif(0.0, valid_pairs.size()));
+            if(idx == valid_pairs.size()) idx = valid_pairs.size() - 1;
+            int i = valid_pairs[idx].first;
+            int j = valid_pairs[idx].second;
+            Omega(m) = tau_map(i) - tau_map(j);
+            for(int k=0; k<P_main; ++k) X_diff(m, k) = X_map(i, k) - X_map(j, k);
+            for(int k=0; k<P_int; ++k) {
+                int idx1 = int_pairs[k].first;
+                int idx2 = int_pairs[k].second;
+                X_diff(m, P_main + k) = X_map(i, idx1)*X_map(i, idx2) - X_map(j, idx1)*X_map(j, idx2);
+            }
+        }
+        
+        // 2. Update Beta
+        Eigen::MatrixXd XtX = X_diff.transpose() * X_diff;
+        Eigen::VectorXd XtY = X_diff.transpose() * Omega;
+        
+        Eigen::MatrixXd Prec = XtX / sigma2_rank;
+        for (int k = 0; k < P_main; ++k) {
+            Prec(k, k) += 1.0 / safe_var_linear(tau_beta[k] * tau_beta[k] * tau_glob * tau_glob);
+        }
+        for (int k = 0; k < P_int; ++k) {
+            double var_k = unlink ? (tau_beta[P_main + k] * tau_beta[P_main + k]) : (tau_int * tau_beta[int_pairs[k].first] * tau_beta[int_pairs[k].second]);
+            Prec(P_main + k, P_main + k) += 1.0 / safe_var_linear(var_k * tau_glob * tau_glob);
+        }
+        
+        Eigen::LLT<Eigen::MatrixXd> llt(Prec);
+        if (llt.info() != Eigen::Success) {
+            Prec.diagonal().array() += 1e-6;
+            llt.compute(Prec);
+        }
+        
+        if (llt.info() == Eigen::Success) {
+            Eigen::VectorXd mean = llt.solve(XtY / sigma2_rank);
+            Eigen::VectorXd z(P_combined);
+            for(int j=0; j<P_combined; ++j) z(j) = Rf_rnorm(0.0, 1.0);
+            beta = mean + llt.matrixU().solve(z);
+        }
+        
+        // 3. Update sigma2_rank
+        Eigen::VectorXd Y_hat = X_diff * beta;
+        double SSE = (Omega - Y_hat).squaredNorm();
+        double a_new = 0.001 + actual_M / 2.0;
+        double b_new = 0.001 + SSE / 2.0;
+        sigma2_rank = rinvgamma_linear(a_new, b_new);
+        
+        // 4. Update Horseshoe
+        for(int k=0; k<P_main; ++k) {
+            nu[k] = rinvgamma_linear(1.0, 1.0 + 1.0 / safe_var_linear(tau_beta[k]*tau_beta[k]));
+            tau_beta[k] = std::sqrt(safe_var_linear(rinvgamma_linear(1.0, 1.0 / safe_var_linear(nu[k]) + (beta(k)*beta(k)) / safe_var_linear(2.0 * tau_glob * tau_glob * sigma2_rank))));
+        }
+        if (unlink) {
+             for(int k=0; k<P_int; ++k) {
+                  int idx = P_main + k;
+                  nu[idx] = rinvgamma_linear(1.0, 1.0 + 1.0 / safe_var_linear(tau_beta[idx]*tau_beta[idx]));
+                  tau_beta[idx] = std::sqrt(safe_var_linear(rinvgamma_linear(1.0, 1.0 / safe_var_linear(nu[idx]) + (beta(idx)*beta(idx)) / safe_var_linear(2.0 * tau_glob * tau_glob * sigma2_rank))));
+             }
+        }
+        
+        xi = rinvgamma_linear(1.0, 1.0 + 1.0 / safe_var_linear(tau_glob*tau_glob));
+        double sum_scaled = 0.0;
+        for(int k=0; k<P_main; ++k) sum_scaled += (beta(k)*beta(k)) / safe_var_linear(tau_beta[k]*tau_beta[k]);
+        if (unlink) {
+             for(int k=0; k<P_int; ++k) sum_scaled += (beta(P_main+k)*beta(P_main+k)) / safe_var_linear(tau_beta[P_main+k]*tau_beta[P_main+k]);
+        } else {
+             for(int k=0; k<P_int; ++k) {
+                  double var_k = tau_int * tau_beta[int_pairs[k].first] * tau_beta[int_pairs[k].second];
+                  sum_scaled += (beta(P_main+k)*beta(P_main+k)) / safe_var_linear(var_k);
+             }
+        }
+        double shape_glob = (P_combined + 1.0) / 2.0;
+        double rate_glob = 1.0 / safe_var_linear(xi) + sum_scaled / safe_var_linear(2.0 * sigma2_rank);
+        tau_glob = std::sqrt(safe_var_linear(rinvgamma_linear(shape_glob, rate_glob)));
+        
+        // Save
+        if (iter >= burn_in) {
+            int save_idx = iter - burn_in;
+            for(int j=0; j<P_combined; ++j) {
+                out_beta(save_idx, j) = beta(j);
+                out_tau_beta(save_idx, j) = tau_beta[j];
+            }
+            out_sigma2[save_idx] = sigma2_rank;
+            out_tau_glob[save_idx] = tau_glob;
+        }
+    }
+    PutRNGstate();
+    
+    return writable::list({
+        "beta"_nm = out_beta,
+        "tau_beta"_nm = out_tau_beta,
+        "sigma2_rank"_nm = out_sigma2,
+        "tau_glob"_nm = out_tau_glob
+    });
+}
+
+[[cpp11::register]]
+writable::list run_ltr_pg_cpp(
+    const doubles& tau_tilde,
+    const doubles_matrix<>& X,
+    const integers& are_continuous,
+    int M,
+    double epsilon,
+    const doubles& beta_init,
+    const doubles& beta_int_init,
+    const doubles& tau_beta_init,
+    const doubles& nu_init,
+    double tau_int_init,
+    double tau_glob_init,
+    double xi_init,
+    bool unlink,
+    int n_iter,
+    int burn_in
+) {
+    GetRNGstate();
+    int N = tau_tilde.size();
+    int P_main = X.ncol();
+    
+    std::vector<std::pair<int, int>> int_pairs;
+    for (int i = 0; i < P_main; i++) {
+        for (int j = i + 1; j < P_main; j++) {
+            if ((are_continuous[i] == 1) || (are_continuous[j] == 1)) {
+                int_pairs.push_back({i, j});
+            }
+        }
+    }
+    int P_int = int_pairs.size();
+    int P_combined = P_main + P_int;
+    
+    Eigen::Map<const Eigen::VectorXd> tau_map((const double*)tau_tilde.data(), N);
+    Eigen::Map<const Eigen::MatrixXd> X_map((const double*)X.data(), N, P_main);
+    
+    Eigen::VectorXd beta(P_combined);
+    for(int j=0; j<P_main; ++j) beta(j) = beta_init[j];
+    for(int k=0; k<P_int; ++k) beta(P_main + k) = beta_int_init[k];
+    
+    std::vector<double> tau_beta(P_combined);
+    std::vector<double> nu(P_combined);
+    for(int j=0; j<P_combined; ++j) {
+        tau_beta[j] = tau_beta_init[j];
+        nu[j] = nu_init[j];
+    }
+    double tau_int = tau_int_init;
+    double tau_glob = tau_glob_init;
+    double xi = xi_init;
+    
+    int n_save = n_iter;
+    writable::doubles_matrix<> out_beta(n_save, P_combined);
+    writable::doubles_matrix<> out_tau_beta(n_save, P_combined);
+    writable::doubles out_tau_glob(n_save);
+    
+    std::vector<std::pair<int, int>> valid_pairs;
+    for (int i = 0; i < N; ++i) {
+        for (int j = 0; j < N; ++j) {
+            if (tau_tilde[i] > tau_tilde[j] + epsilon) {
+                valid_pairs.push_back({i, j});
+            }
+        }
+    }
+    if (valid_pairs.empty()) {
+        PutRNGstate();
+        cpp11::stop("No valid pairs found with the given epsilon.");
+    }
+    
+    // --- Precompute weights for importance sampling ---
+    std::vector<double> cumulative_weights;
+    cumulative_weights.reserve(valid_pairs.size());
+    double total_weight = 0.0;
+    for (size_t k = 0; k < valid_pairs.size(); ++k) {
+        int i = valid_pairs[k].first;
+        int j = valid_pairs[k].second;
+        double w = tau_map(i) - tau_map(j);
+        total_weight += w;
+        cumulative_weights.push_back(total_weight);
+    }
+    
+    int total_iter = burn_in + n_iter;
+    for (int iter = 0; iter < total_iter; ++iter) {
+        int actual_M = std::min(M, (int)valid_pairs.size());
+        Eigen::MatrixXd Xt_Gamma_X = Eigen::MatrixXd::Zero(P_combined, P_combined);
+        Eigen::VectorXd XtY = Eigen::VectorXd::Zero(P_combined);
+        
+        // Scale factor for unbiased estimation of full dataset likelihood
+        double scale = total_weight / actual_M;
+        
+        for (int m = 0; m < actual_M; ++m) {
+            // Importance sampling proportional to tau difference
+            double u = Rf_runif(0.0, total_weight);
+            auto it = std::lower_bound(cumulative_weights.begin(), cumulative_weights.end(), u);
+            int idx = std::distance(cumulative_weights.begin(), it);
+            if (idx >= valid_pairs.size()) idx = valid_pairs.size() - 1;
+            
+            int i = valid_pairs[idx].first;
+            int j = valid_pairs[idx].second;
+            
+            Eigen::VectorXd x_row(P_combined);
+            for(int k=0; k<P_main; ++k) x_row(k) = X_map(i, k) - X_map(j, k);
+            for(int k=0; k<P_int; ++k) {
+                int idx1 = int_pairs[k].first;
+                int idx2 = int_pairs[k].second;
+                x_row(P_main + k) = X_map(i, idx1)*X_map(i, idx2) - X_map(j, idx1)*X_map(j, idx2);
+            }
+            
+            double psi_k = x_row.dot(beta);
+            double pg_draw = sample_pg1_cpp(psi_k);
+            
+            // Notice that w_k nicely cancels out because of the importance sampling probability!
+            double gamma_m = scale * pg_draw;
+            
+            Xt_Gamma_X.selfadjointView<Eigen::Lower>().rankUpdate(x_row, gamma_m);
+            XtY += x_row * (scale / 2.0);
+        }
+        Xt_Gamma_X = Xt_Gamma_X.selfadjointView<Eigen::Lower>();
+        
+        Eigen::MatrixXd Prec = Xt_Gamma_X;
+        for (int k = 0; k < P_main; ++k) {
+            Prec(k, k) += 1.0 / safe_var_linear(tau_beta[k] * tau_beta[k] * tau_glob * tau_glob);
+        }
+        for (int k = 0; k < P_int; ++k) {
+            double var_k = unlink ? (tau_beta[P_main + k] * tau_beta[P_main + k]) : (tau_int * tau_beta[int_pairs[k].first] * tau_beta[int_pairs[k].second]);
+            Prec(P_main + k, P_main + k) += 1.0 / safe_var_linear(var_k * tau_glob * tau_glob);
+        }
+        
+        Eigen::LLT<Eigen::MatrixXd> llt(Prec);
+        if (llt.info() != Eigen::Success) {
+            Prec.diagonal().array() += 1e-6;
+            llt.compute(Prec);
+        }
+        
+        if (llt.info() == Eigen::Success) {
+            Eigen::VectorXd mean = llt.solve(XtY);
+            Eigen::VectorXd z(P_combined);
+            for(int j=0; j<P_combined; ++j) z(j) = Rf_rnorm(0.0, 1.0);
+            beta = mean + llt.matrixU().solve(z);
+        }
+        
+        for(int k=0; k<P_main; ++k) {
+            nu[k] = rinvgamma_linear(1.0, 1.0 + 1.0 / safe_var_linear(tau_beta[k]*tau_beta[k]));
+            tau_beta[k] = std::sqrt(safe_var_linear(rinvgamma_linear(1.0, 1.0 / safe_var_linear(nu[k]) + (beta(k)*beta(k)) / safe_var_linear(2.0 * tau_glob * tau_glob))));
+        }
+        if (unlink) {
+             for(int k=0; k<P_int; ++k) {
+                  int idx = P_main + k;
+                  nu[idx] = rinvgamma_linear(1.0, 1.0 + 1.0 / safe_var_linear(tau_beta[idx]*tau_beta[idx]));
+                  tau_beta[idx] = std::sqrt(safe_var_linear(rinvgamma_linear(1.0, 1.0 / safe_var_linear(nu[idx]) + (beta(idx)*beta(idx)) / safe_var_linear(2.0 * tau_glob * tau_glob))));
+             }
+        }
+        
+        xi = rinvgamma_linear(1.0, 1.0 + 1.0 / safe_var_linear(tau_glob*tau_glob));
+        double sum_scaled = 0.0;
+        for(int k=0; k<P_main; ++k) sum_scaled += (beta(k)*beta(k)) / safe_var_linear(tau_beta[k]*tau_beta[k]);
+        if (unlink) {
+             for(int k=0; k<P_int; ++k) sum_scaled += (beta(P_main+k)*beta(P_main+k)) / safe_var_linear(tau_beta[P_main+k]*tau_beta[P_main+k]);
+        } else {
+             for(int k=0; k<P_int; ++k) {
+                  double var_k = tau_int * tau_beta[int_pairs[k].first] * tau_beta[int_pairs[k].second];
+                  sum_scaled += (beta(P_main+k)*beta(P_main+k)) / safe_var_linear(var_k);
+             }
+        }
+        double shape_glob = (P_combined + 1.0) / 2.0;
+        double rate_glob = 1.0 / safe_var_linear(xi) + sum_scaled / 2.0;
+        tau_glob = std::sqrt(safe_var_linear(rinvgamma_linear(shape_glob, rate_glob)));
+        
+        if (iter >= burn_in) {
+            int save_idx = iter - burn_in;
+            for(int j=0; j<P_combined; ++j) {
+                out_beta(save_idx, j) = beta(j);
+                out_tau_beta(save_idx, j) = tau_beta[j];
+            }
+            out_tau_glob[save_idx] = tau_glob;
+        }
+    }
+    PutRNGstate();
+    
+    return writable::list({
+        "beta"_nm = out_beta,
+        "tau_beta"_nm = out_tau_beta,
+        "tau_glob"_nm = out_tau_glob
+    });
+}

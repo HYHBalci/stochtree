@@ -40,7 +40,7 @@
 #'   - `control_coding_init` Initial value of the "control" group coding parameter. This is ignored when Z is not binary. Default: `-0.5`.
 #'   - `treated_coding_init` Initial value of the "treatment" group coding parameter. This is ignored when Z is not binary. Default: `0.5`.
 #'   - `rfx_prior_var` Prior on the (diagonals of the) covariance of the additive group-level random regression coefficients. Must be a vector of length `ncol(rfx_basis_train)`. Default: `rep(1, ncol(rfx_basis_train))`
-#'   - `random_seed` Integer parameterizing the C++ random number generator. If not specified, the C++ random number generator is seeded according to `std::random_device`.
+#'   - `random_seed` Integer parameterizing the C++ random number generator. If not specified, it will be drawn from R's random number generator to ensure reproducibility.
 #'   - `keep_burnin` Whether or not "burnin" samples should be included in the stored samples of forests and other parameters. Default `FALSE`. Ignored if `num_mcmc = 0`.
 #'   - `keep_gfr` Whether or not "grow-from-root" samples should be included in the stored samples of forests and other parameters. Default `FALSE`. Ignored if `num_mcmc = 0`.
 #'   - `keep_every` How many iterations of the burned-in MCMC sampler should be run before forests and parameters are retained. Default `1`. Setting `keep_every <- k` for some `k > 1` will "thin" the MCMC samples by retaining every `k`-th sample, rather than simply every sample. This can reduce the autocorrelation of the MCMC samples.
@@ -1055,7 +1055,7 @@ bcf_linear_shapley <- function(X_train, Z_train, y_train, propensity_train = NUL
   outcome_train <- createOutcome(resid_train)
   
   # Random number generator (std::mt19937)
-  if (is.null(random_seed)) random_seed = sample(1:10000,1,FALSE)
+  if (is.null(random_seed) || random_seed == -1) random_seed = sample(1:1000000,1,FALSE)
   rng <- createCppRNG(random_seed)
   
   # Sampling data structures

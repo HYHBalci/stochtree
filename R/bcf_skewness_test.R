@@ -107,7 +107,8 @@ bcf_restricted_skewness_ppc <- function(X_train, Z_train, y_train, propensity_tr
   standardize <- general_params_updated$standardize
   sample_sigma2_global <- general_params_updated$sample_sigma2_global
   random_seed <- general_params_updated$random_seed
-  set.seed(ifelse(random_seed == -1, sample(1:10000, 1), random_seed))
+  if (is.null(random_seed) || random_seed == -1) random_seed = sample(1:1000000, 1, FALSE)
+  set.seed(random_seed)
   rng <- createCppRNG(random_seed)
   verbose <- general_params_updated$verbose
   probit_outcome_model <- general_params_updated$probit_outcome_model

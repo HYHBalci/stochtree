@@ -293,6 +293,7 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
   b_1 <- general_params_updated$treated_coding_init
   rfx_prior_var <- general_params_updated$rfx_prior_var
   random_seed <- general_params_updated$random_seed
+  if (is.null(random_seed) || random_seed == -1) random_seed = sample(1:1000000,1,FALSE)
   set.seed(random_seed)
   keep_burnin <- general_params_updated$keep_burnin
   keep_gfr <- general_params_updated$keep_gfr
@@ -940,7 +941,6 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
   outcome_train <- createOutcome(resid_train)
   
   # Random number generator (std::mt19937)
-  if (is.null(random_seed)) random_seed = sample(1:10000,1,FALSE)
   rng <- createCppRNG(random_seed)
   
   # Sampling data structures
