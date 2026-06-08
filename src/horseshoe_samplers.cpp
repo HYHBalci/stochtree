@@ -970,34 +970,56 @@ writable::list run_ltr_pg_cpp(
     writable::doubles_matrix<> out_tau_beta(n_save, P_combined);
     writable::doubles out_tau_glob(n_save);
     
-    std::vector<std::pair<int, int>> valid_pairs;
-    for (int i = 0; i < N; ++i) {
-        for (int j = 0; j < N; ++j) {
-            if (tau_tilde[i] > tau_tilde[j] + epsilon) {
-                valid_pairs.push_back({i, j});
-            }
+    struct Patient_sort_helper {
+        double tau;
+        int id;
+        bool operator<(const Patient_sort_helper& other) const {
+            return tau < other.tau;
         }
+    };
+    
+    std::vector<Patient_sort_helper> sorted_tau(N);
+    for (int i = 0; i < N; ++i) {
+        sorted_tau[i] = {tau_map(i), i};
     }
-    if (valid_pairs.empty()) {
+    std::sort(sorted_tau.begin(), sorted_tau.end());
+    
+    std::vector<double> S(N + 1, 0.0);
+    for (int i = 0; i < N; ++i) {
+        S[i + 1] = S[i] + sorted_tau[i].tau;
+    }
+    
+    std::vector<int> k_idx(N, 0);
+    std::vector<double> W(N, 0.0);
+    std::vector<double> CW(N, 0.0);
+    long long total_valid_pairs = 0;
+    double total_weight = 0.0;
+    
+    for (int i = 0; i < N; ++i) {
+        double target = sorted_tau[i].tau - epsilon;
+        auto it = std::lower_bound(sorted_tau.begin(), sorted_tau.begin() + i, target, 
+                                   [](const Patient_sort_helper& p, double val) { return p.tau < val; });
+        int k = std::distance(sorted_tau.begin(), it);
+        k_idx[i] = k;
+        total_valid_pairs += k;
+        
+        if (k > 0) {
+            W[i] = k * sorted_tau[i].tau - S[k];
+        } else {
+            W[i] = 0.0;
+        }
+        total_weight += W[i];
+        CW[i] = total_weight;
+    }
+    
+    if (total_valid_pairs == 0) {
         PutRNGstate();
         cpp11::stop("No valid pairs found with the given epsilon.");
     }
     
-    // --- Precompute weights for importance sampling ---
-    std::vector<double> cumulative_weights;
-    cumulative_weights.reserve(valid_pairs.size());
-    double total_weight = 0.0;
-    for (size_t k = 0; k < valid_pairs.size(); ++k) {
-        int i = valid_pairs[k].first;
-        int j = valid_pairs[k].second;
-        double w = tau_map(i) - tau_map(j);
-        total_weight += w;
-        cumulative_weights.push_back(total_weight);
-    }
-    
     int total_iter = burn_in + n_iter;
     for (int iter = 0; iter < total_iter; ++iter) {
-        int actual_M = std::min(M, (int)valid_pairs.size());
+        int actual_M = std::min((long long)M, total_valid_pairs);
         Eigen::MatrixXd Xt_Gamma_X = Eigen::MatrixXd::Zero(P_combined, P_combined);
         Eigen::VectorXd XtY = Eigen::VectorXd::Zero(P_combined);
         
@@ -1007,12 +1029,33 @@ writable::list run_ltr_pg_cpp(
         for (int m = 0; m < actual_M; ++m) {
             // Importance sampling proportional to tau difference
             double u = Rf_runif(0.0, total_weight);
-            auto it = std::lower_bound(cumulative_weights.begin(), cumulative_weights.end(), u);
-            int idx = std::distance(cumulative_weights.begin(), it);
-            if (idx >= valid_pairs.size()) idx = valid_pairs.size() - 1;
+            auto it = std::lower_bound(CW.begin(), CW.end(), u);
+            int idx_i = std::distance(CW.begin(), it);
+            if (idx_i >= N) idx_i = N - 1;
             
-            int i = valid_pairs[idx].first;
-            int j = valid_pairs[idx].second;
+            // Re-draw if we somehow hit an index with 0 valid pairs (precision boundary issues)
+            while (k_idx[idx_i] == 0 && idx_i < N - 1) {
+                idx_i++;
+            }
+            if (k_idx[idx_i] == 0) continue;
+            
+            double u_j = Rf_runif(0.0, W[idx_i]);
+            int low = 1, high = k_idx[idx_i];
+            int chosen_j = -1;
+            while (low <= high) {
+                int mid = low + (high - low) / 2;
+                double cw_mid = mid * sorted_tau[idx_i].tau - S[mid];
+                if (cw_mid < u_j) {
+                    low = mid + 1;
+                } else {
+                    chosen_j = mid - 1;
+                    high = mid - 1;
+                }
+            }
+            if (chosen_j == -1) chosen_j = k_idx[idx_i] - 1;
+            
+            int i = sorted_tau[idx_i].id;
+            int j = sorted_tau[chosen_j].id;
             
             Eigen::VectorXd x_row(P_combined);
             for(int k=0; k<P_main; ++k) x_row(k) = X_map(i, k) - X_map(j, k);
