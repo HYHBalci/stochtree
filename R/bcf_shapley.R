@@ -231,7 +231,9 @@ bcf_linear_shapley <- function(X_train, Z_train, y_train, propensity_train = NUL
     boolean_continuous <- as.vector(X_final_var_info$is_continuous)
   } else if(interaction_rule == 'continuous_or_binary'){
     boolean_continuous <- as.vector(X_final_var_info$is_continuous) + as.vector(X_final_var_info$is_binary)
-  } else{ #This means we allow all interactions. 
+  } else if(interaction_rule == 'none'){
+    boolean_continuous <- rep(0, nrow(X_final_var_info))
+  } else{ 
     boolean_continuous <- as.vector(X_final_var_info$is_continuous) + as.vector(X_final_var_info$is_binary) + as.vector(X_final_var_info$is_categorical)
   }
   
@@ -261,6 +263,7 @@ bcf_linear_shapley <- function(X_train, Z_train, y_train, propensity_train = NUL
       paste(main_cov_names[pair[1]], main_cov_names[pair[2]], sep = ":")
     })
   } else {
+    int_pairs_matrix <- matrix(nrow=2, ncol=0)
     beta_int_names <- character(0)
   }
   

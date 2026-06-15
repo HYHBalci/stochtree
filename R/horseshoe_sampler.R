@@ -122,7 +122,9 @@ horseshoe_sampler <- function(X, y, z,
     boolean_continuous <- as.vector(X_final_var_info$is_continuous)
   } else if(interaction_rule == 'continuous_or_binary'){
     boolean_continuous <- as.vector(X_final_var_info$is_continuous) + as.vector(X_final_var_info$is_binary)
-  } else{ #This means we allow all interactions. 
+  } else if(interaction_rule == 'none'){
+    boolean_continuous <- rep(0, nrow(X_final_var_info))
+  } else{ 
     boolean_continuous <- as.vector(X_final_var_info$is_continuous) + as.vector(X_final_var_info$is_binary) + as.vector(X_final_var_info$is_categorical)
   }
   are_continuous <- as.vector(as.integer(boolean_continuous*1))

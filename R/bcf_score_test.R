@@ -30,7 +30,8 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
     sigma2_global_shape = 1, sigma2_global_scale = 0.001, variable_weights = NULL, 
     propensity_covariate = "mu", adaptive_coding = FALSE, rfx_prior_var = NULL, random_seed = -1, 
     keep_burnin = FALSE, keep_gfr = FALSE, keep_every = 1, num_chains = 1, verbose = TRUE, 
-    probit_outcome_model = FALSE, standardize_cov = FALSE, interaction_rule = "continuous"
+    probit_outcome_model = FALSE, standardize_cov = FALSE, interaction_rule = "continuous",
+    alpha_prior_var = 100.0 # Added explicit prior variance for the main effect
   )
   general_params_updated <- preprocessParams(general_params_default, general_params)
   
@@ -62,8 +63,13 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
     internal_propensity_model <- TRUE
     if(general_params_updated$verbose) print("Estimating internal propensity scores...")
     bart_model_propensity <- bart(X_train = X_train_raw, y_train = as.numeric(Z_train), 
-                                  num_gfr = 50, num_burnin = 0, num_mcmc = 0)
-    propensity_train <- as.matrix(rowMeans(bart_model_propensity$y_hat_train[, 11:50]))
+                                  num_gfr = num_gfr, num_burnin = 0, num_mcmc = 0)
+    
+    # Robust indexing for internal propensity scores: take the last 80% of GFR draws
+    start_idx <- floor(num_gfr * 0.2) + 1
+    if (start_idx > num_gfr) start_idx <- max(1, num_gfr - 5)
+    
+    propensity_train <- as.matrix(rowMeans(bart_model_propensity$y_hat_train[, start_idx:num_gfr, drop=FALSE]))
   }
   if(is.null(propensity_train)) propensity_train <- rep(mean(Z_train), n)
   propensity_train <- as.matrix(propensity_train)
@@ -72,59 +78,16 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
   Z_cen <- Z_train - as.vector(propensity_train)
   
   # =====================================================================
-  # SCORE TEST DESIGN MATRIX (Linear + Permitted Interactions)
+  # SCORE TEST DESIGN MATRIX
   # =====================================================================
-  sd_X <- apply(X_train_raw, 2, sd)
-  valid_cols <- sd_X > 1e-6
-  
-  X_linear <- scale(X_train_raw[, valid_cols, drop = FALSE], center = TRUE, scale = TRUE)
-  
-  is_cont <- as.logical(as.numeric(X_train_metadata_init$is_continuous))
-  is_bin <- as.logical(as.numeric(X_train_metadata_init$is_binary))
-  
-  interaction_rule <- general_params_updated$interaction_rule
-  if (interaction_rule == "continuous") {
-    is_candidate <- is_cont
-  } else if (interaction_rule == "continuous_or_binary") {
-    is_candidate <- is_cont | is_bin
-  } else {
-    is_candidate <- rep(TRUE, ncol(X_train_raw))
-  }
-  
-  interaction_list <- list()
-  num_covariates <- ncol(X_train_raw)
-  if (num_covariates > 1) {
-    for (j in 1:(num_covariates - 1)) {
-      for (k in (j + 1):num_covariates) {
-        if (is_candidate[j] || is_candidate[k]) {
-          interaction_list[[length(interaction_list) + 1]] <- c(j, k)
-        }
-      }
-    }
-  }
-  
-  if (length(interaction_list) > 0) {
-    ipairs <- do.call(cbind, interaction_list)
-    X_interactions <- matrix(0, nrow = n, ncol = ncol(ipairs))
-    for (idx in 1:ncol(ipairs)) {
-      X_interactions[, idx] <- X_train_raw[, ipairs[1, idx]] * X_train_raw[, ipairs[2, idx]]
-    }
-    X_interactions <- scale(X_interactions, center = TRUE, scale = TRUE)
-    valid_int <- apply(X_interactions, 2, sd, na.rm = TRUE) > 1e-6
-    X_interactions <- X_interactions[, valid_int, drop = FALSE]
-  } else {
-    X_interactions <- NULL
-  }
-  
-  X_cen <- cbind(X_linear, X_interactions)
-  p_valid <- ncol(X_cen)
-  # =====================================================================
+  design_info <- prepare_score_test_design(X_train_raw, X_train_metadata_init, general_params_updated$interaction_rule)
+  X_cen <- design_info$X_cen
+  p_valid <- design_info$p_valid
   
   num_chains <- general_params_updated$num_chains
   alpha_samples <- matrix(0, nrow = num_chains, ncol = num_mcmc)
   sigma2_samples <- matrix(0, nrow = num_chains, ncol = num_mcmc)
   
-  # Storage setup depends on whether Rao-Blackwellization is used
   if (use_rao_blackwell) {
     T_vec_sum <- matrix(0, nrow = num_chains, ncol = p_valid)
     Var_T_sum <- array(0, dim = c(num_chains, p_valid, p_valid))
@@ -135,7 +98,7 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
     pval_quad_samples <- matrix(0, nrow = num_chains, ncol = num_mcmc)
   }
   
-  alpha_prior_var <- 100.0
+  alpha_prior_var <- general_params_updated$alpha_prior_var
   
   prognostic_forest_params_default <- list(
     num_trees = 250, alpha = 0.95, beta = 2.0, min_samples_leaf = 5, max_depth = 10, 
@@ -144,6 +107,7 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
   )
   prognostic_forest_params_updated <- preprocessParams(prognostic_forest_params_default, prognostic_forest_params)
   
+  # Variance forest params retained per user request, though not sampled in restricted model
   variance_forest_params_default <- list(
     num_trees = 0, alpha = 0.95, beta = 2.0, min_samples_leaf = 5, max_depth = 10, 
     leaf_prior_calibration_param = 1.5, variance_forest_init = NULL, var_forest_prior_shape = NULL, 
@@ -193,9 +157,21 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
   }
   resid_train_base <- (y_train - y_bar_train) / y_std_train
   init_mu <- mean(resid_train_base)
-  current_sigma2_init <- general_params_updated$sigma2_global_init %||% (1.0 * var(resid_train_base))
+  
+  # Fix scale mismatch for user-provided initializations
+  user_sigma2_init <- general_params_updated$sigma2_global_init
+  if (!is.null(user_sigma2_init)) {
+    if (standardize) user_sigma2_init <- user_sigma2_init / (y_std_train^2)
+  }
+  current_sigma2_init <- user_sigma2_init %||% (1.0 * var(resid_train_base))
+  
   if (is.null(b_leaf_mu)) b_leaf_mu <- var(resid_train_base) / (num_trees_mu)
-  sigma2_leaf_mu <- prognostic_forest_params_updated$sigma2_leaf_init %||% (2.0 * var(resid_train_base) / num_trees_mu)
+  
+  user_sigma2_leaf <- prognostic_forest_params_updated$sigma2_leaf_init
+  if (!is.null(user_sigma2_leaf)) {
+    if (standardize) user_sigma2_leaf <- user_sigma2_leaf / (y_std_train^2)
+  }
+  sigma2_leaf_mu <- user_sigma2_leaf %||% (2.0 * var(resid_train_base) / num_trees_mu)
   current_leaf_scale_mu <- as.matrix(sigma2_leaf_mu)
   
   num_samples <- num_gfr + num_burnin + num_mcmc
@@ -291,21 +267,10 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
           T_vec_sum[chain_num, ] <- T_vec_sum[chain_num, ] + as.numeric(T_vec)
           Var_T_sum[chain_num, , ] <- Var_T_sum[chain_num, , ] + Var_T
         } else {
-          # Legacy method: P-values at every draw
-          Var_T_inv <- MASS::ginv(Var_T)
-          T_quad <- as.numeric(t(T_vec) %*% Var_T_inv %*% T_vec)
-          pval_quad_samples[chain_num, mcmc_counter] <- pchisq(T_quad, df = p_valid, lower.tail = FALSE)
-          
-          inv_sd_T <- 1 / sqrt(diag(Var_T))
-          Cor_T <- diag(inv_sd_T) %*% Var_T %*% diag(inv_sd_T)
-          
-          Z_vec <- as.numeric(T_vec * inv_sd_T)
-          max_Z <- max(abs(Z_vec))
-          
-          prob_inside <- tryCatch({
-            mvtnorm::pmvnorm(lower = rep(-max_Z, p_valid), upper = rep(max_Z, p_valid), sigma = Cor_T)[1]
-          }, error = function(e) max(0, 1 - (p_valid * 2 * pnorm(-max_Z))))
-          pval_max_samples[chain_num, mcmc_counter] <- 1 - prob_inside
+          # Legacy method: P-values at every draw using safe evaluation
+          draw_pvals <- compute_pmvnorm_safe(T_vec, Var_T, p_valid)
+          pval_quad_samples[chain_num, mcmc_counter] <- draw_pvals$quad
+          pval_max_samples[chain_num, mcmc_counter] <- draw_pvals$max
         }
       }
     }
@@ -322,21 +287,9 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
       T_vec_mean <- T_vec_sum[c, ] / num_mcmc
       Var_T_mean <- Var_T_sum[c, , ] / num_mcmc
       
-      Var_T_mean_inv <- MASS::ginv(Var_T_mean)
-      T_quad <- as.numeric(t(T_vec_mean) %*% Var_T_mean_inv %*% T_vec_mean)
-      rb_pval_quad[c] <- pchisq(T_quad, df = p_valid, lower.tail = FALSE)
-      
-      inv_sd_T <- 1 / sqrt(diag(Var_T_mean))
-      Cor_T <- diag(inv_sd_T) %*% Var_T_mean %*% diag(inv_sd_T)
-      
-      Z_vec <- as.numeric(T_vec_mean * inv_sd_T)
-      max_Z <- max(abs(Z_vec))
-      
-      prob_inside <- tryCatch({
-        mvtnorm::pmvnorm(lower = rep(-max_Z, p_valid), upper = rep(max_Z, p_valid), sigma = Cor_T)[1]
-      }, error = function(e) max(0, 1 - (p_valid * 2 * pnorm(-max_Z))))
-      
-      rb_pval_max[c] <- 1 - prob_inside
+      rb_pvals <- compute_pmvnorm_safe(T_vec_mean, Var_T_mean, p_valid)
+      rb_pval_quad[c] <- rb_pvals$quad
+      rb_pval_max[c] <- rb_pvals$max
     }
   }
   
@@ -360,4 +313,100 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
   
   class(result) <- "bcfscoretest"
   return(result)
+}
+
+# =====================================================================
+# HELPER FUNCTIONS
+# =====================================================================
+
+prepare_score_test_design <- function(X_train_raw, X_train_metadata_init, interaction_rule) {
+  n <- nrow(X_train_raw)
+  sd_X <- apply(X_train_raw, 2, sd)
+  valid_cols <- sd_X > 1e-6
+  
+  X_linear <- scale(X_train_raw[, valid_cols, drop = FALSE], center = TRUE, scale = TRUE)
+  
+  is_cont <- as.logical(as.numeric(X_train_metadata_init$is_continuous))
+  is_bin <- as.logical(as.numeric(X_train_metadata_init$is_binary))
+  
+  if (interaction_rule == "continuous") {
+    is_candidate <- is_cont
+  } else if (interaction_rule == "continuous_or_binary") {
+    is_candidate <- is_cont | is_bin
+  } else if (interaction_rule == "none") {
+    is_candidate <- rep(FALSE, ncol(X_train_raw))
+  } else {
+    is_candidate <- rep(TRUE, ncol(X_train_raw))
+  }
+  
+  interaction_list <- list()
+  num_covariates <- ncol(X_train_raw)
+  if (num_covariates > 1) {
+    for (j in 1:(num_covariates - 1)) {
+      for (k in (j + 1):num_covariates) {
+        if (is_candidate[j] || is_candidate[k]) {
+          interaction_list[[length(interaction_list) + 1]] <- c(j, k)
+        }
+      }
+    }
+  }
+  
+  if (length(interaction_list) > 0) {
+    ipairs <- do.call(cbind, interaction_list)
+    X_interactions <- matrix(0, nrow = n, ncol = ncol(ipairs))
+    for (idx in 1:ncol(ipairs)) {
+      X_interactions[, idx] <- X_train_raw[, ipairs[1, idx]] * X_train_raw[, ipairs[2, idx]]
+    }
+    X_interactions <- scale(X_interactions, center = TRUE, scale = TRUE)
+    valid_int <- apply(X_interactions, 2, sd, na.rm = TRUE) > 1e-6
+    X_interactions <- X_interactions[, valid_int, drop = FALSE]
+  } else {
+    X_interactions <- NULL
+  }
+  
+  X_cen_candidate <- cbind(X_linear, X_interactions)
+  
+  # Perform QR decomposition to drop linearly dependent columns and find exact rank
+  qr_decomp <- qr(X_cen_candidate)
+  p_valid <- qr_decomp$rank
+  
+  # Select only the linearly independent columns using pivot from QR
+  independent_cols <- qr_decomp$pivot[1:p_valid]
+  X_cen <- X_cen_candidate[, independent_cols, drop = FALSE]
+  
+  return(list(X_cen = X_cen, p_valid = p_valid))
+}
+
+compute_pmvnorm_safe <- function(T_vec, Var_T, p_valid) {
+  # Add a tiny ridge penalty to ensure positive definiteness in edge cases
+  Var_T_ridge <- Var_T + diag(1e-8, p_valid)
+  
+  Var_T_inv <- tryCatch({
+    solve(Var_T_ridge)
+  }, error = function(e) {
+    MASS::ginv(Var_T)
+  })
+  
+  T_quad <- as.numeric(t(T_vec) %*% Var_T_inv %*% T_vec)
+  pval_quad <- pchisq(T_quad, df = p_valid, lower.tail = FALSE)
+  
+  inv_sd_T <- 1 / sqrt(diag(Var_T_ridge))
+  Cor_T <- diag(inv_sd_T) %*% Var_T_ridge %*% diag(inv_sd_T)
+  
+  Z_vec <- as.numeric(T_vec * inv_sd_T)
+  max_Z <- max(abs(Z_vec))
+  
+  if (p_valid > 20) {
+    # Skip pmvnorm if dimensions are too high (will hang indefinitely)
+    pval_max <- max(0, 1 - (p_valid * 2 * pnorm(-max_Z)))
+  } else {
+    prob_inside <- tryCatch({
+      mvtnorm::pmvnorm(lower = rep(-max_Z, p_valid), upper = rep(max_Z, p_valid), sigma = Cor_T)[1]
+    }, error = function(e) {
+      max(0, 1 - (p_valid * 2 * pnorm(-max_Z)))
+    })
+    pval_max <- 1 - prob_inside
+  }
+  
+  return(list(quad = pval_quad, max = pval_max))
 }

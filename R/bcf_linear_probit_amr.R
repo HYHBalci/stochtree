@@ -45,7 +45,7 @@
 #' @return A list of class `bcfmodel` containing sampling outputs (forests, coefficients, residuals) and model metadata.
 #' @export
 
-bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_group_ids_train = NULL, 
+bcf_linear_probit_amr <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_group_ids_train = NULL, 
                               rfx_basis_train = NULL, X_test = NULL, Z_test = NULL, propensity_test = NULL, 
                               rfx_group_ids_test = NULL, rfx_basis_test = NULL, 
                               num_gfr = 5, num_burnin = 0, num_mcmc = 100, 
@@ -1456,14 +1456,36 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           tau_residual <- outcome_train$get_data() + rnorm(n, 0, sigma_residual)
         }
         
+        # --- AMR Weighting Function Sampling ---
+        mu_x_raw_train <- active_forest_mu$predict_raw(forest_dataset_train)
+        Y_star <- y_train - mu_x_raw_train
+        
+        pi_hat <- if (length(propensity_train) > 0) propensity_train else rep(mean(Z_train), n)
+        pi_hat <- pmax(pmin(pi_hat, 0.999), 0.001)
+        h_cov <- (Z_train - pi_hat) / (pi_hat * (1 - pi_hat))
+        
+        df_weights <- 5
+        B_spline <- splines::bs(Y_star, df = df_weights)
+        var_h <- max(var(h_cov), 1e-6)
+        prior_prec <- diag(df_weights) / 100
+        prec_matrix <- crossprod(B_spline) / var_h + prior_prec
+        mean_theta <- solve(prec_matrix, crossprod(B_spline, h_cov) / var_h)
+        L_chol <- chol(prec_matrix)
+        theta_sample <- mean_theta + backsolve(L_chol, rnorm(df_weights))
+        
+        w_star_raw <- as.vector(B_spline %*% theta_sample)
+        obs_weights <- pmax(w_star_raw, 1e-4)
+        # ----------------------------------------
+        
         # Linear Update Call (Repeated n_tijn times)
         for(v in 1:n_tijn){
           if(use_ncp){
-            update_results <- updateLinearTreatmentCpp_NCP_cpp_old(
+            update_results <- updateLinearTreatmentCpp_NCP_amr(
               X = if (propensity_seperate == "tau") X_train else X_train_raw,
               Z = Z_linear,
               propensity_train = propensity_train, 
               residual = tau_residual,
+              obs_weights = obs_weights,
               are_continuous = as.vector(as.integer(boolean_continuous*1)),
               alpha_tilde = alpha, 
               gamma = gamma,
@@ -1483,11 +1505,12 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
               hn_scale = hn_scale)
             
           } else {
-            update_results <- updateLinearTreatmentCpp_cpp_old(
+            update_results <- updateLinearTreatmentCpp_amr(
               X = if (propensity_seperate == "tau") X_train else X_train_raw,
               Z = Z_linear,
               propensity_train = propensity_train,
               residual = tau_residual,
+              obs_weights = obs_weights,
               are_continuous = as.vector(as.integer(boolean_continuous*1)),
               alpha = alpha,
               gamma = gamma,

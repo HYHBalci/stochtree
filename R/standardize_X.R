@@ -24,7 +24,7 @@
 
 standardize_X_by_index <- function(X_initial,
                                    process_data = TRUE, # New parameter
-                                   interaction_rule = c("continuous", "continuous_or_binary", "all"),
+                                   interaction_rule = c("continuous", "continuous_or_binary", "all", "none"),
                                    cat_coding_method = c("sum", "difference")) {
   
   # --- Input Validation and Setup ---
@@ -192,7 +192,8 @@ standardize_X_by_index <- function(X_initial,
       interaction_rule,
       "all" = rep(TRUE, n_final_cols),
       "continuous_or_binary" = X_final_var_info$is_continuous | X_final_var_info$is_binary,
-      "continuous" = X_final_var_info$is_continuous
+      "continuous" = X_final_var_info$is_continuous,
+      "none" = rep(FALSE, n_final_cols)
     )
     
     # Count pairs where at least one variable is a candidate

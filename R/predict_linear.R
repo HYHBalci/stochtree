@@ -5,11 +5,15 @@ generate_interaction_matrix <- function(X, X_final_var_info, interaction_rule, p
     boolean_continuous <- as.vector(X_final_var_info$is_continuous)
   } else if(interaction_rule == 'continuous_or_binary'){
     boolean_continuous <- as.vector(X_final_var_info$is_continuous) + as.vector(X_final_var_info$is_binary)
+  } else if(interaction_rule == 'none'){
+    boolean_continuous <- rep(0, nrow(X_final_var_info))
   } else{ 
     boolean_continuous <- as.vector(X_final_var_info$is_continuous) + as.vector(X_final_var_info$is_binary) + as.vector(X_final_var_info$is_categorical)
   }
   is_continuous_map_final_X <- as.logical(boolean_continuous)
-  
+  if (length(is_continuous_map_final_X) < p_mod) {
+    is_continuous_map_final_X <- c(is_continuous_map_final_X, rep(FALSE, p_mod - length(is_continuous_map_final_X)))
+  }
   interaction_cols_list <- list()
   int_pairs <- list()
   col_idx_counter <- 1
