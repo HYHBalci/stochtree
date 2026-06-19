@@ -15,6 +15,7 @@
 #include <stochtree/normal_sampler.h>
 #include <stochtree/partition_tracker.h>
 #include <stochtree/prior.h>
+#include <stochtree/ranking_kl_leaf_model.h>
 #include <stochtree/tree.h>
 
 #include <random>
@@ -352,7 +353,9 @@ enum ModelType {
   kConstantLeafGaussian, 
   kUnivariateRegressionLeafGaussian, 
   kMultivariateRegressionLeafGaussian, 
-  kLogLinearVariance
+  kLogLinearVariance,
+  kListNetKL,
+  kDistributionalKL
 };
 
 /*! \brief Sufficient statistic and associated operations for gaussian homoskedastic constant leaf outcome model */
@@ -941,7 +944,9 @@ class LogLinearVarianceLeafModel {
 using SuffStatVariant = std::variant<GaussianConstantSuffStat, 
                                      GaussianUnivariateRegressionSuffStat, 
                                      GaussianMultivariateRegressionSuffStat, 
-                                     LogLinearVarianceSuffStat>;
+                                     LogLinearVarianceSuffStat,
+                                     ListNetKLSuffStat,
+                                     DistributionalKLSuffStat>;
 
 /*!
  * \brief Unifying layer for disparate leaf model class types
@@ -954,7 +959,9 @@ using SuffStatVariant = std::variant<GaussianConstantSuffStat,
 using LeafModelVariant = std::variant<GaussianConstantLeafModel, 
                                       GaussianUnivariateRegressionLeafModel, 
                                       GaussianMultivariateRegressionLeafModel, 
-                                      LogLinearVarianceLeafModel>;
+                                      LogLinearVarianceLeafModel,
+                                      ListNetKLLeafModel,
+                                      DistributionalKLLeafModel>;
 
 template<typename SuffStatType, typename... SuffStatConstructorArgs>
 static inline SuffStatVariant createSuffStat(SuffStatConstructorArgs... leaf_suff_stat_args) {
@@ -979,6 +986,10 @@ static inline SuffStatVariant suffStatFactory(ModelType model_type, int basis_di
     return createSuffStat<GaussianUnivariateRegressionSuffStat>();
   } else if (model_type == kMultivariateRegressionLeafGaussian) {
     return createSuffStat<GaussianMultivariateRegressionSuffStat, int>(basis_dim);
+  } else if (model_type == kListNetKL) {
+    return createSuffStat<ListNetKLSuffStat>();
+  } else if (model_type == kDistributionalKL) {
+    return createSuffStat<DistributionalKLSuffStat>();
   } else {
     return createSuffStat<LogLinearVarianceSuffStat>();
   }
@@ -1000,6 +1011,12 @@ static inline LeafModelVariant leafModelFactory(ModelType model_type, double tau
     return createLeafModel<GaussianUnivariateRegressionLeafModel, double>(tau);
   } else if (model_type == kMultivariateRegressionLeafGaussian) {
     return createLeafModel<GaussianMultivariateRegressionLeafModel, Eigen::MatrixXd>(Sigma0);
+  } else if (model_type == kListNetKL) {
+    return createLeafModel<ListNetKLLeafModel, double>(tau);
+  } else if (model_type == kDistributionalKL) {
+    // We pass tau as first parameter and alpha as second parameter
+    // For now we use b as alpha since a and b are used for LogLinearVariance
+    return createLeafModel<DistributionalKLLeafModel, double, double>(tau, b);
   } else {
     return createLeafModel<LogLinearVarianceLeafModel, double, double>(a, b);
   }

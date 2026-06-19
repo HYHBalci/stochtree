@@ -273,7 +273,7 @@ class ForestDataset {
  public:
   /*! \brief Default constructor. No data is loaded at construction time. */
   ForestDataset() {}
-  ~ForestDataset() {}
+  virtual ~ForestDataset() {}
   /*!
    * \brief Copy / load covariates from raw memory buffer (often pointer to data in a R matrix or numpy array)
    * 
@@ -574,6 +574,40 @@ class RandomEffectsDataset {
   bool has_basis_{false};
   bool has_var_weights_{false};
   bool has_group_labels_{false};
+};
+
+/*! \brief API for loading and accessing data used to sample uplift forest ensembles */
+class UpliftForestDataset : public ForestDataset {
+ public:
+  /*! \brief Default constructor. No data is loaded at construction time. */
+  UpliftForestDataset() : ForestDataset() {}
+  ~UpliftForestDataset() {}
+  /*!
+   * \brief Copy / load treatment indicator vector
+   * 
+   * \param treatment_indicator Vector of integers indicating treatment status (e.g. 1 for treated, 0 for control)
+   */
+  void AddTreatmentIndicator(std::vector<int32_t>& treatment_indicator) {
+    treatment_indicator_ = treatment_indicator;
+    has_treatment_indicator_ = true;
+  }
+  /*! \brief Whether or not a `UpliftForestDataset` has (yet) loaded treatment indicator data */
+  inline bool HasTreatmentIndicator() {return has_treatment_indicator_;}
+  /*!
+   * \brief Returns a dataset's treatment indicator value stored at element `row`
+   * 
+   * \param row Index to query in the treatment indicator vector
+   */
+  inline int32_t TreatmentIndicatorValue(data_size_t row) {return treatment_indicator_[row];}
+  /*!
+   * \brief Return a reference to the raw `std::vector` storing the treatment indicator
+   * 
+   * \return Reference to internal std::vector
+   */
+  inline std::vector<int32_t>& GetTreatmentIndicator() {return treatment_indicator_;}
+ private:
+  std::vector<int32_t> treatment_indicator_;
+  bool has_treatment_indicator_{false};
 };
 
 /*! \} */ // end of data_group

@@ -242,6 +242,51 @@ createForestDataset <- function(covariates, basis=NULL, variance_weights=NULL){
     )))
 }
 
+#' Dataset used to sample an uplift forest
+#'
+#' @description
+#' An uplift dataset consists of four matrices / vectors: covariates, 
+#' treatment indicator, bases, and variance weights. 
+UpliftForestDataset <- R6::R6Class(
+    classname = "UpliftForestDataset",
+    cloneable = FALSE,
+    public = list(
+        data_ptr = NULL,
+        initialize = function(covariates, treatment, basis=NULL, variance_weights=NULL) {
+            self$data_ptr <- create_uplift_forest_dataset_cpp()
+            forest_dataset_add_covariates_cpp(self$data_ptr, covariates)
+            forest_dataset_add_treatment_cpp(self$data_ptr, as.integer(treatment))
+            if (!is.null(basis)) {
+                forest_dataset_add_basis_cpp(self$data_ptr, basis)
+            }
+            if (!is.null(variance_weights)) {
+                forest_dataset_add_weights_cpp(self$data_ptr, variance_weights)
+            }
+        }, 
+        update_basis = function(basis) {
+            forest_dataset_update_basis_cpp(self$data_ptr, basis)
+        },
+        update_weights = function(weights) {
+            forest_dataset_add_weights_cpp(self$data_ptr, weights)
+        }
+    )
+)
+
+#' Create an uplift forest dataset
+#'
+#' @param covariates Matrix of covariates
+#' @param treatment Vector of treatment indicators
+#' @param basis (Optional) Matrix of bases used to define a leaf regression
+#' @param variance_weights (Optional) Vector of observation-specific variance weights
+#'
+#' @return `UpliftForestDataset` object
+#' @export
+createUpliftForestDataset <- function(covariates, treatment, basis=NULL, variance_weights=NULL){
+    return(invisible((
+        UpliftForestDataset$new(covariates, treatment, basis, variance_weights)
+    )))
+}
+
 #' Create an outcome object
 #'
 #' @param outcome Vector of outcome values

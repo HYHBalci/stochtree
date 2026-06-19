@@ -42,13 +42,17 @@ void sample_gfr_one_iteration_cpp(cpp11::external_pointer<StochTree::ForestDatas
     else if (leaf_model_int == 1) model_type = StochTree::ModelType::kUnivariateRegressionLeafGaussian;
     else if (leaf_model_int == 2) model_type = StochTree::ModelType::kMultivariateRegressionLeafGaussian;
     else if (leaf_model_int == 3) model_type = StochTree::ModelType::kLogLinearVariance;
+    else if (leaf_model_int == 4) model_type = StochTree::ModelType::kListNetKL;
+    else if (leaf_model_int == 5) model_type = StochTree::ModelType::kDistributionalKL;
     else StochTree::Log::Fatal("Invalid model type");
     
     // Unpack leaf model parameters
     double leaf_scale;
     Eigen::MatrixXd leaf_scale_matrix;
     if ((model_type == StochTree::ModelType::kConstantLeafGaussian) || 
-        (model_type == StochTree::ModelType::kUnivariateRegressionLeafGaussian)) {
+        (model_type == StochTree::ModelType::kUnivariateRegressionLeafGaussian) ||
+        (model_type == StochTree::ModelType::kListNetKL) || 
+        (model_type == StochTree::ModelType::kDistributionalKL)) {
         leaf_scale = leaf_model_scale_input(0,0);
     } else if (model_type == StochTree::ModelType::kMultivariateRegressionLeafGaussian) {
         int num_row = leaf_model_scale_input.nrow();
@@ -72,14 +76,18 @@ void sample_gfr_one_iteration_cpp(cpp11::external_pointer<StochTree::ForestDatas
     int num_basis = data->NumBasis();
     
     // Run one iteration of the sampler
-    if (model_type == StochTree::ModelType::kConstantLeafGaussian) {
+    if (leaf_model.index() == 0) {
         StochTree::GFRSampleOneIter<StochTree::GaussianConstantLeafModel, StochTree::GaussianConstantSuffStat>(*active_forest, *tracker, *forest_samples, std::get<StochTree::GaussianConstantLeafModel>(leaf_model), *data, *residual, *split_prior, *rng, var_weights_vector, global_variance, feature_types_, cutpoint_grid_size, keep_forest, pre_initialized, true);
-    } else if (model_type == StochTree::ModelType::kUnivariateRegressionLeafGaussian) {
+    } else if (leaf_model.index() == 1) {
         StochTree::GFRSampleOneIter<StochTree::GaussianUnivariateRegressionLeafModel, StochTree::GaussianUnivariateRegressionSuffStat>(*active_forest, *tracker, *forest_samples, std::get<StochTree::GaussianUnivariateRegressionLeafModel>(leaf_model), *data, *residual, *split_prior, *rng, var_weights_vector, global_variance, feature_types_, cutpoint_grid_size, keep_forest, pre_initialized, true);
-    } else if (model_type == StochTree::ModelType::kMultivariateRegressionLeafGaussian) {
+    } else if (leaf_model.index() == 2) {
         StochTree::GFRSampleOneIter<StochTree::GaussianMultivariateRegressionLeafModel, StochTree::GaussianMultivariateRegressionSuffStat, int>(*active_forest, *tracker, *forest_samples, std::get<StochTree::GaussianMultivariateRegressionLeafModel>(leaf_model), *data, *residual, *split_prior, *rng, var_weights_vector, global_variance, feature_types_, cutpoint_grid_size, keep_forest, pre_initialized, true, num_basis);
-    } else if (model_type == StochTree::ModelType::kLogLinearVariance) {
+    } else if (leaf_model.index() == 3) {
         StochTree::GFRSampleOneIter<StochTree::LogLinearVarianceLeafModel, StochTree::LogLinearVarianceSuffStat>(*active_forest, *tracker, *forest_samples, std::get<StochTree::LogLinearVarianceLeafModel>(leaf_model), *data, *residual, *split_prior, *rng, var_weights_vector, global_variance, feature_types_, cutpoint_grid_size, keep_forest, pre_initialized, false);
+    } else if (leaf_model.index() == 4) {
+        StochTree::GFRSampleOneIter<StochTree::ListNetKLLeafModel, StochTree::ListNetKLSuffStat>(*active_forest, *tracker, *forest_samples, std::get<StochTree::ListNetKLLeafModel>(leaf_model), *data, *residual, *split_prior, *rng, var_weights_vector, global_variance, feature_types_, cutpoint_grid_size, keep_forest, pre_initialized, false);
+    } else if (leaf_model.index() == 5) {
+        StochTree::GFRSampleOneIter<StochTree::DistributionalKLLeafModel, StochTree::DistributionalKLSuffStat>(*active_forest, *tracker, *forest_samples, std::get<StochTree::DistributionalKLLeafModel>(leaf_model), *data, *residual, *split_prior, *rng, var_weights_vector, global_variance, feature_types_, cutpoint_grid_size, keep_forest, pre_initialized, true);
     }
 }
 
@@ -114,13 +122,17 @@ void sample_mcmc_one_iteration_cpp(cpp11::external_pointer<StochTree::ForestData
     else if (leaf_model_int == 1) model_type = StochTree::ModelType::kUnivariateRegressionLeafGaussian;
     else if (leaf_model_int == 2) model_type = StochTree::ModelType::kMultivariateRegressionLeafGaussian;
     else if (leaf_model_int == 3) model_type = StochTree::ModelType::kLogLinearVariance;
+    else if (leaf_model_int == 4) model_type = StochTree::ModelType::kListNetKL;
+    else if (leaf_model_int == 5) model_type = StochTree::ModelType::kDistributionalKL;
     else StochTree::Log::Fatal("Invalid model type");
     
     // Unpack leaf model parameters
     double leaf_scale;
     Eigen::MatrixXd leaf_scale_matrix;
     if ((model_type == StochTree::ModelType::kConstantLeafGaussian) || 
-        (model_type == StochTree::ModelType::kUnivariateRegressionLeafGaussian)) {
+        (model_type == StochTree::ModelType::kUnivariateRegressionLeafGaussian) ||
+        (model_type == StochTree::ModelType::kListNetKL) || 
+        (model_type == StochTree::ModelType::kDistributionalKL)) {
         leaf_scale = leaf_model_scale_input(0,0);
     } else if (model_type == StochTree::ModelType::kMultivariateRegressionLeafGaussian) {
         int num_row = leaf_model_scale_input.nrow();
@@ -144,14 +156,18 @@ void sample_mcmc_one_iteration_cpp(cpp11::external_pointer<StochTree::ForestData
     int num_basis = data->NumBasis();
     
     // Run one iteration of the sampler
-    if (model_type == StochTree::ModelType::kConstantLeafGaussian) {
+    if (leaf_model.index() == 0) {
         StochTree::MCMCSampleOneIter<StochTree::GaussianConstantLeafModel, StochTree::GaussianConstantSuffStat>(*active_forest, *tracker, *forest_samples, std::get<StochTree::GaussianConstantLeafModel>(leaf_model), *data, *residual, *split_prior, *rng, var_weights_vector, global_variance, keep_forest, pre_initialized, true);
-    } else if (model_type == StochTree::ModelType::kUnivariateRegressionLeafGaussian) {
+    } else if (leaf_model.index() == 1) {
         StochTree::MCMCSampleOneIter<StochTree::GaussianUnivariateRegressionLeafModel, StochTree::GaussianUnivariateRegressionSuffStat>(*active_forest, *tracker, *forest_samples, std::get<StochTree::GaussianUnivariateRegressionLeafModel>(leaf_model), *data, *residual, *split_prior, *rng, var_weights_vector, global_variance, keep_forest, pre_initialized, true);
-    } else if (model_type == StochTree::ModelType::kMultivariateRegressionLeafGaussian) {
+    } else if (leaf_model.index() == 2) {
         StochTree::MCMCSampleOneIter<StochTree::GaussianMultivariateRegressionLeafModel, StochTree::GaussianMultivariateRegressionSuffStat, int>(*active_forest, *tracker, *forest_samples, std::get<StochTree::GaussianMultivariateRegressionLeafModel>(leaf_model), *data, *residual, *split_prior, *rng, var_weights_vector, global_variance, keep_forest, pre_initialized, true, num_basis);
-    } else if (model_type == StochTree::ModelType::kLogLinearVariance) {
+    } else if (leaf_model.index() == 3) {
         StochTree::MCMCSampleOneIter<StochTree::LogLinearVarianceLeafModel, StochTree::LogLinearVarianceSuffStat>(*active_forest, *tracker, *forest_samples, std::get<StochTree::LogLinearVarianceLeafModel>(leaf_model), *data, *residual, *split_prior, *rng, var_weights_vector, global_variance, keep_forest, pre_initialized, false);
+    } else if (leaf_model.index() == 4) {
+        StochTree::MCMCSampleOneIter<StochTree::ListNetKLLeafModel, StochTree::ListNetKLSuffStat>(*active_forest, *tracker, *forest_samples, std::get<StochTree::ListNetKLLeafModel>(leaf_model), *data, *residual, *split_prior, *rng, var_weights_vector, global_variance, keep_forest, pre_initialized, false);
+    } else if (leaf_model.index() == 5) {
+        StochTree::MCMCSampleOneIter<StochTree::DistributionalKLLeafModel, StochTree::DistributionalKLSuffStat>(*active_forest, *tracker, *forest_samples, std::get<StochTree::DistributionalKLLeafModel>(leaf_model), *data, *residual, *split_prior, *rng, var_weights_vector, global_variance, keep_forest, pre_initialized, true);
     }
 }
 

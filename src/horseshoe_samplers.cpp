@@ -365,23 +365,31 @@ writable::list updateLinearTreatmentCpp_cpp(
     residual_map = y_target - new_fit;
     
     // Shrinkage Updates
-    for(int j = 0; j < p_mod + regularize_ATE; j++){
-      double current_coeff = regularize_ATE ? ((j==0) ? alpha : beta[j-1]) : beta[j];
-      nu[j] = rinvgamma_linear(1.0, 1.0 + 1.0 / safe_var_linear(tau_beta[j]*tau_beta[j]));
-      tau_beta[j] = std::sqrt(safe_var_linear(rinvgamma_linear(1.0, (1.0 / safe_var_linear(nu[j])) + (current_coeff * current_coeff) / safe_var_linear(2.0 * tau_glob * tau_glob * sigma2))));
-    } 
-    if(unlink){
-      for(size_t k=0; k<int_pairs.size(); k++) {
-        int idx = offset_beta_int + k;
-        nu[idx] = rinvgamma_linear(1.0, 1.0 + 1.0/safe_var_linear(tau_beta[idx]*tau_beta[idx]));
-        tau_beta[idx] = std::sqrt(safe_var_linear(rinvgamma_linear(1.0, (1.0/safe_var_linear(nu[idx])) + (beta_int[k]*beta_int[k])/safe_var_linear(2.0*tau_glob*tau_glob*sigma2))));
+    if (sample_global_prior != "OLS") {
+      for(int j = 0; j < p_mod + regularize_ATE; j++){
+        double current_coeff = regularize_ATE ? ((j==0) ? alpha : beta[j-1]) : beta[j];
+        nu[j] = rinvgamma_linear(1.0, 1.0 + 1.0 / safe_var_linear(tau_beta[j]*tau_beta[j]));
+        tau_beta[j] = std::sqrt(safe_var_linear(rinvgamma_linear(1.0, (1.0 / safe_var_linear(nu[j])) + (current_coeff * current_coeff) / safe_var_linear(2.0 * tau_glob * tau_glob * sigma2))));
+      } 
+      if(unlink){
+        for(size_t k=0; k<int_pairs.size(); k++) {
+          int idx = offset_beta_int + k;
+          nu[idx] = rinvgamma_linear(1.0, 1.0 + 1.0/safe_var_linear(tau_beta[idx]*tau_beta[idx]));
+          tau_beta[idx] = std::sqrt(safe_var_linear(rinvgamma_linear(1.0, (1.0/safe_var_linear(nu[idx])) + (beta_int[k]*beta_int[k])/safe_var_linear(2.0*tau_glob*tau_glob*sigma2))));
+        }
       }
-    }
-    if (use_prognostic_shapley) {
-      for(int l = 0; l < p_prog; l++){
-        nu_gamma[l] = rinvgamma_linear(1.0, 1.0 + 1.0 / safe_var_linear(tau_gamma[l]*tau_gamma[l]));
-        tau_gamma[l] = std::sqrt(safe_var_linear(rinvgamma_linear(1.0, (1.0 / safe_var_linear(nu_gamma[l])) + (gamma[l] * gamma[l]) / safe_var_linear(2.0 * tau_glob * tau_glob * sigma2))));
+      if (use_prognostic_shapley) {
+        for(int l = 0; l < p_prog; l++){
+          nu_gamma[l] = rinvgamma_linear(1.0, 1.0 + 1.0 / safe_var_linear(tau_gamma[l]*tau_gamma[l]));
+          tau_gamma[l] = std::sqrt(safe_var_linear(rinvgamma_linear(1.0, (1.0 / safe_var_linear(nu_gamma[l])) + (gamma[l] * gamma[l]) / safe_var_linear(2.0 * tau_glob * tau_glob * sigma2))));
+        }
       }
+    } else {
+      for(size_t j = 0; j < tau_beta.size(); j++) tau_beta[j] = 10.0;
+      if (use_prognostic_shapley) {
+        for(size_t l = 0; l < tau_gamma.size(); l++) tau_gamma[l] = 10.0;
+      }
+      tau_glob = 1.0;
     }
     
     // Global Tau
@@ -630,24 +638,31 @@ writable::doubles updateLinearTreatmentCpp_NCP_cpp(
     residual_map = y_target - new_fit;
     
     // Shrinkage
-    for(int j=0; j<p_mod+regularize_ATE; ++j) {
-      double coef = regularize_ATE ? ((j==0)?alpha_tilde:beta_tilde[j-1]) : beta_tilde[j];
-      nu[j] = rinvgamma_linear(1.0, 1.0 + 1.0/safe_var_linear(tau_beta[j]*tau_beta[j]));
-      tau_beta[j] = std::sqrt(safe_var_linear(rinvgamma_linear(1.0, (1.0/safe_var_linear(nu[j])) + (coef*coef)/safe_var_linear(2.0*tau_glob*tau_glob))));
-    }
-    if(unlink){
-      for(size_t k=0; k<int_pairs.size(); k++){
-        int full_idx = offset_beta_int + k;
-        nu[full_idx] = rinvgamma_linear(1.0, 1.0 + 1.0 / safe_var_linear(tau_beta[full_idx]*tau_beta[full_idx]));
-        tau_beta[full_idx] = std::sqrt(safe_var_linear(rinvgamma_linear(1.0, (1.0 / safe_var_linear(nu[full_idx])) + (beta_int_tilde[k] * beta_int_tilde[k]) / safe_var_linear(2.0 * tau_glob * tau_glob))));
+    if (sample_global_prior != "OLS") {
+      for(int j=0; j<p_mod+regularize_ATE; ++j) {
+        double coef = regularize_ATE ? ((j==0)?alpha_tilde:beta_tilde[j-1]) : beta_tilde[j];
+        nu[j] = rinvgamma_linear(1.0, 1.0 + 1.0/safe_var_linear(tau_beta[j]*tau_beta[j]));
+        tau_beta[j] = std::sqrt(safe_var_linear(rinvgamma_linear(1.0, (1.0/safe_var_linear(nu[j])) + (coef*coef)/safe_var_linear(2.0*tau_glob*tau_glob))));
       }
-    }
-    
-    if (use_prognostic_shapley) {
-      for(int l=0; l<p_prog; ++l) {
-        nu_gamma[l] = rinvgamma_linear(1.0, 1.0 + 1.0/safe_var_linear(tau_gamma[l]*tau_gamma[l]));
-        tau_gamma[l] = std::sqrt(safe_var_linear(rinvgamma_linear(1.0, (1.0/safe_var_linear(nu_gamma[l])) + (gamma_tilde[l]*gamma_tilde[l])/safe_var_linear(2.0*tau_glob*tau_glob))));
+      if(unlink){
+        for(size_t k=0; k<int_pairs.size(); k++){
+          int full_idx = offset_beta_int + k;
+          nu[full_idx] = rinvgamma_linear(1.0, 1.0 + 1.0 / safe_var_linear(tau_beta[full_idx]*tau_beta[full_idx]));
+          tau_beta[full_idx] = std::sqrt(safe_var_linear(rinvgamma_linear(1.0, (1.0 / safe_var_linear(nu[full_idx])) + (beta_int_tilde[k] * beta_int_tilde[k]) / safe_var_linear(2.0 * tau_glob * tau_glob))));
+        }
       }
+      if (use_prognostic_shapley) {
+        for(int l=0; l<p_prog; ++l) {
+          nu_gamma[l] = rinvgamma_linear(1.0, 1.0 + 1.0/safe_var_linear(tau_gamma[l]*tau_gamma[l]));
+          tau_gamma[l] = std::sqrt(safe_var_linear(rinvgamma_linear(1.0, (1.0/safe_var_linear(nu_gamma[l])) + (gamma_tilde[l]*gamma_tilde[l])/safe_var_linear(2.0*tau_glob*tau_glob))));
+        }
+      }
+    } else {
+      for(size_t j = 0; j < tau_beta.size(); j++) tau_beta[j] = 10.0;
+      if (use_prognostic_shapley) {
+        for(size_t l = 0; l < tau_gamma.size(); l++) tau_gamma[l] = 10.0;
+      }
+      tau_glob = 1.0;
     }
     
     if (sample_global_prior == "half-cauchy") {

@@ -16,6 +16,16 @@ cpp11::external_pointer<StochTree::ForestDataset> create_forest_dataset_cpp() {
 }
 
 [[cpp11::register]]
+cpp11::external_pointer<StochTree::ForestDataset> create_uplift_forest_dataset_cpp() {
+    // Create smart pointer to newly allocated object
+    std::unique_ptr<StochTree::UpliftForestDataset> dataset_ptr_ = std::make_unique<StochTree::UpliftForestDataset>();
+    
+    // Release management of the pointer to R session
+    // We cast the pointer to ForestDataset so R can pass it to existing functions seamlessly
+    return cpp11::external_pointer<StochTree::ForestDataset>(dataset_ptr_.release());
+}
+
+[[cpp11::register]]
 int dataset_num_rows_cpp(cpp11::external_pointer<StochTree::ForestDataset> dataset) {
     return dataset->NumObservations();
 }
@@ -94,6 +104,23 @@ void forest_dataset_add_weights_cpp(cpp11::external_pointer<StochTree::ForestDat
 
     // Unprotect pointers to R data
     UNPROTECT(1);
+}
+
+[[cpp11::register]]
+void forest_dataset_add_treatment_cpp(cpp11::external_pointer<StochTree::ForestDataset> dataset_ptr, cpp11::integers treatment) {
+    // Cast to UpliftForestDataset
+    StochTree::UpliftForestDataset* uplift_data = dynamic_cast<StochTree::UpliftForestDataset*>(dataset_ptr.get());
+    if (uplift_data == nullptr) {
+        StochTree::Log::Fatal("Dataset is not an UpliftForestDataset");
+    }
+    
+    // Add treatment
+    int n = treatment.size();
+    std::vector<int32_t> treatment_indicator(n);
+    for (int i = 0; i < n; i++) {
+        treatment_indicator[i] = treatment[i];
+    }
+    uplift_data->AddTreatmentIndicator(treatment_indicator);
 }
 
 [[cpp11::register]]

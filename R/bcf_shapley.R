@@ -209,8 +209,10 @@ bcf_linear_shapley <- function(X_train, Z_train, y_train, propensity_train = NUL
   save_partial_residual <- general_params_updated$save_partial_residual
   
   # Data handling
-  if(is.logical(sample_global_prior)){
-    stop("global prior definition should be a string")
+  if(is.character(sample_global_prior)){
+    sample_global_prior <- match.arg(sample_global_prior, c("half-cauchy", "half-normal", "none", "OLS"))
+  } else {
+    stop("sample_global_prior must be a string: 'half-cauchy', 'half-normal', 'none', or 'OLS'")
   }
   if(general_params_updated$verbose){
     print("Pre-Processing data!")

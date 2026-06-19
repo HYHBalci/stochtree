@@ -33,7 +33,7 @@
 #'   \item `use_ncp`: Boolean. If `TRUE`, uses Non-Centered Parameterization for the linear sampler (recommended for stability).
 #'   \item `interaction_rule`: String. Defines how interactions are created (e.g., "continuous", "continuous_or_binary").
 #'   \item `regularize_ATE`: Boolean. If `TRUE`, the ATE (intercept) is subject to shrinkage.
-#'   \item `sample_global_prior`: String. Prior for global shrinkage parameter (e.g., "half-cauchy", "half-normal").
+#'   \item `sample_global_prior`: String. Prior for global shrinkage parameter (e.g., "half-cauchy", "half-normal", "OLS" to bypass shrinkage).
 #'   \item `unlink`: Boolean. If `TRUE`, decouples interaction shrinkage from main effects.
 #'   \item `probit_outcome_model`: Boolean. If `TRUE`, assumes binary outcome with probit link.
 #'   \item `standardize`: Boolean. Whether to standardize the outcome. Default `TRUE`.
@@ -113,8 +113,10 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
   save_partial_residual <- general_params_updated$save_partial_residual
   
   # Data handling
-  if(is.logical(sample_global_prior)){
-    stop("global prior definition should be a string")
+  if(is.character(sample_global_prior)){
+    sample_global_prior <- match.arg(sample_global_prior, c("half-cauchy", "half-normal", "none", "OLS"))
+  } else {
+    stop("sample_global_prior must be a string: 'half-cauchy', 'half-normal', 'none', or 'OLS'")
   }
   if(general_params_updated$verbose){
     print("Pre-Processing data!")

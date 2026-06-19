@@ -13,6 +13,13 @@ extern "C" SEXP _stochtree_create_forest_dataset_cpp() {
   END_CPP11
 }
 // R_data.cpp
+cpp11::external_pointer<StochTree::ForestDataset> create_uplift_forest_dataset_cpp();
+extern "C" SEXP _stochtree_create_uplift_forest_dataset_cpp() {
+  BEGIN_CPP11
+    return cpp11::as_sexp(create_uplift_forest_dataset_cpp());
+  END_CPP11
+}
+// R_data.cpp
 int dataset_num_rows_cpp(cpp11::external_pointer<StochTree::ForestDataset> dataset);
 extern "C" SEXP _stochtree_dataset_num_rows_cpp(SEXP dataset) {
   BEGIN_CPP11
@@ -76,6 +83,14 @@ void forest_dataset_add_weights_cpp(cpp11::external_pointer<StochTree::ForestDat
 extern "C" SEXP _stochtree_forest_dataset_add_weights_cpp(SEXP dataset_ptr, SEXP weights) {
   BEGIN_CPP11
     forest_dataset_add_weights_cpp(cpp11::as_cpp<cpp11::decay_t<cpp11::external_pointer<StochTree::ForestDataset>>>(dataset_ptr), cpp11::as_cpp<cpp11::decay_t<cpp11::doubles>>(weights));
+    return R_NilValue;
+  END_CPP11
+}
+// R_data.cpp
+void forest_dataset_add_treatment_cpp(cpp11::external_pointer<StochTree::ForestDataset> dataset_ptr, cpp11::integers treatment);
+extern "C" SEXP _stochtree_forest_dataset_add_treatment_cpp(SEXP dataset_ptr, SEXP treatment) {
+  BEGIN_CPP11
+    forest_dataset_add_treatment_cpp(cpp11::as_cpp<cpp11::decay_t<cpp11::external_pointer<StochTree::ForestDataset>>>(dataset_ptr), cpp11::as_cpp<cpp11::decay_t<cpp11::integers>>(treatment));
     return R_NilValue;
   END_CPP11
 }
@@ -1048,6 +1063,20 @@ extern "C" SEXP _stochtree_run_ltr_pg_cpp(SEXP tau_tilde, SEXP X, SEXP are_conti
     return cpp11::as_sexp(run_ltr_pg_cpp(cpp11::as_cpp<cpp11::decay_t<const doubles&>>(tau_tilde), cpp11::as_cpp<cpp11::decay_t<const doubles_matrix<>&>>(X), cpp11::as_cpp<cpp11::decay_t<const integers&>>(are_continuous), cpp11::as_cpp<cpp11::decay_t<int>>(M), cpp11::as_cpp<cpp11::decay_t<double>>(epsilon), cpp11::as_cpp<cpp11::decay_t<const doubles&>>(beta_init), cpp11::as_cpp<cpp11::decay_t<const doubles&>>(beta_int_init), cpp11::as_cpp<cpp11::decay_t<const doubles&>>(tau_beta_init), cpp11::as_cpp<cpp11::decay_t<const doubles&>>(nu_init), cpp11::as_cpp<cpp11::decay_t<double>>(tau_int_init), cpp11::as_cpp<cpp11::decay_t<double>>(tau_glob_init), cpp11::as_cpp<cpp11::decay_t<double>>(xi_init), cpp11::as_cpp<cpp11::decay_t<bool>>(unlink), cpp11::as_cpp<cpp11::decay_t<int>>(n_iter), cpp11::as_cpp<cpp11::decay_t<int>>(burn_in)));
   END_CPP11
 }
+// horseshoe_samplers_amr.cpp
+cpp11::writable::list updateLinearTreatmentCpp_amr(const cpp11::doubles_matrix<>& X, const cpp11::doubles& Z, const cpp11::doubles& propensity_train, cpp11::writable::doubles residual, const cpp11::doubles& obs_weights, const cpp11::r_vector<int>& are_continuous, double alpha, double gamma, cpp11::writable::doubles beta, cpp11::writable::doubles beta_int, cpp11::writable::doubles tau_beta, cpp11::writable::doubles nu, double xi, double tau_int, double sigma, double alpha_prior_sd, double tau_glob, const std::string& sample_global_prior, bool unlink, bool gibbs, bool save_output, int index, int max_steps, double step_out, const std::string& propensity_seperate, bool regularize_ATE, double hn_scale);
+extern "C" SEXP _stochtree_updateLinearTreatmentCpp_amr(SEXP X, SEXP Z, SEXP propensity_train, SEXP residual, SEXP obs_weights, SEXP are_continuous, SEXP alpha, SEXP gamma, SEXP beta, SEXP beta_int, SEXP tau_beta, SEXP nu, SEXP xi, SEXP tau_int, SEXP sigma, SEXP alpha_prior_sd, SEXP tau_glob, SEXP sample_global_prior, SEXP unlink, SEXP gibbs, SEXP save_output, SEXP index, SEXP max_steps, SEXP step_out, SEXP propensity_seperate, SEXP regularize_ATE, SEXP hn_scale) {
+  BEGIN_CPP11
+    return cpp11::as_sexp(updateLinearTreatmentCpp_amr(cpp11::as_cpp<cpp11::decay_t<const cpp11::doubles_matrix<>&>>(X), cpp11::as_cpp<cpp11::decay_t<const cpp11::doubles&>>(Z), cpp11::as_cpp<cpp11::decay_t<const cpp11::doubles&>>(propensity_train), cpp11::as_cpp<cpp11::decay_t<cpp11::writable::doubles>>(residual), cpp11::as_cpp<cpp11::decay_t<const cpp11::doubles&>>(obs_weights), cpp11::as_cpp<cpp11::decay_t<const cpp11::r_vector<int>&>>(are_continuous), cpp11::as_cpp<cpp11::decay_t<double>>(alpha), cpp11::as_cpp<cpp11::decay_t<double>>(gamma), cpp11::as_cpp<cpp11::decay_t<cpp11::writable::doubles>>(beta), cpp11::as_cpp<cpp11::decay_t<cpp11::writable::doubles>>(beta_int), cpp11::as_cpp<cpp11::decay_t<cpp11::writable::doubles>>(tau_beta), cpp11::as_cpp<cpp11::decay_t<cpp11::writable::doubles>>(nu), cpp11::as_cpp<cpp11::decay_t<double>>(xi), cpp11::as_cpp<cpp11::decay_t<double>>(tau_int), cpp11::as_cpp<cpp11::decay_t<double>>(sigma), cpp11::as_cpp<cpp11::decay_t<double>>(alpha_prior_sd), cpp11::as_cpp<cpp11::decay_t<double>>(tau_glob), cpp11::as_cpp<cpp11::decay_t<const std::string&>>(sample_global_prior), cpp11::as_cpp<cpp11::decay_t<bool>>(unlink), cpp11::as_cpp<cpp11::decay_t<bool>>(gibbs), cpp11::as_cpp<cpp11::decay_t<bool>>(save_output), cpp11::as_cpp<cpp11::decay_t<int>>(index), cpp11::as_cpp<cpp11::decay_t<int>>(max_steps), cpp11::as_cpp<cpp11::decay_t<double>>(step_out), cpp11::as_cpp<cpp11::decay_t<const std::string&>>(propensity_seperate), cpp11::as_cpp<cpp11::decay_t<bool>>(regularize_ATE), cpp11::as_cpp<cpp11::decay_t<double>>(hn_scale)));
+  END_CPP11
+}
+// horseshoe_samplers_amr.cpp
+cpp11::writable::list updateLinearTreatmentCpp_NCP_amr(const cpp11::doubles_matrix<>& X, const cpp11::doubles& Z, const cpp11::doubles& propensity_train, cpp11::writable::doubles residual, const cpp11::doubles& obs_weights, const cpp11::r_vector<int>& are_continuous, double alpha_tilde, double gamma, cpp11::writable::doubles beta_tilde, cpp11::writable::doubles beta_int_tilde, cpp11::writable::doubles tau_beta, cpp11::writable::doubles nu, double xi, double tau_int, double sigma, double alpha_prior_sd, double tau_glob, const std::string& sample_global_prior, bool unlink, bool gibbs, bool save_output, int index, int max_steps, double step_out, const std::string& propensity_seperate, bool regularize_ATE, double hn_scale);
+extern "C" SEXP _stochtree_updateLinearTreatmentCpp_NCP_amr(SEXP X, SEXP Z, SEXP propensity_train, SEXP residual, SEXP obs_weights, SEXP are_continuous, SEXP alpha_tilde, SEXP gamma, SEXP beta_tilde, SEXP beta_int_tilde, SEXP tau_beta, SEXP nu, SEXP xi, SEXP tau_int, SEXP sigma, SEXP alpha_prior_sd, SEXP tau_glob, SEXP sample_global_prior, SEXP unlink, SEXP gibbs, SEXP save_output, SEXP index, SEXP max_steps, SEXP step_out, SEXP propensity_seperate, SEXP regularize_ATE, SEXP hn_scale) {
+  BEGIN_CPP11
+    return cpp11::as_sexp(updateLinearTreatmentCpp_NCP_amr(cpp11::as_cpp<cpp11::decay_t<const cpp11::doubles_matrix<>&>>(X), cpp11::as_cpp<cpp11::decay_t<const cpp11::doubles&>>(Z), cpp11::as_cpp<cpp11::decay_t<const cpp11::doubles&>>(propensity_train), cpp11::as_cpp<cpp11::decay_t<cpp11::writable::doubles>>(residual), cpp11::as_cpp<cpp11::decay_t<const cpp11::doubles&>>(obs_weights), cpp11::as_cpp<cpp11::decay_t<const cpp11::r_vector<int>&>>(are_continuous), cpp11::as_cpp<cpp11::decay_t<double>>(alpha_tilde), cpp11::as_cpp<cpp11::decay_t<double>>(gamma), cpp11::as_cpp<cpp11::decay_t<cpp11::writable::doubles>>(beta_tilde), cpp11::as_cpp<cpp11::decay_t<cpp11::writable::doubles>>(beta_int_tilde), cpp11::as_cpp<cpp11::decay_t<cpp11::writable::doubles>>(tau_beta), cpp11::as_cpp<cpp11::decay_t<cpp11::writable::doubles>>(nu), cpp11::as_cpp<cpp11::decay_t<double>>(xi), cpp11::as_cpp<cpp11::decay_t<double>>(tau_int), cpp11::as_cpp<cpp11::decay_t<double>>(sigma), cpp11::as_cpp<cpp11::decay_t<double>>(alpha_prior_sd), cpp11::as_cpp<cpp11::decay_t<double>>(tau_glob), cpp11::as_cpp<cpp11::decay_t<const std::string&>>(sample_global_prior), cpp11::as_cpp<cpp11::decay_t<bool>>(unlink), cpp11::as_cpp<cpp11::decay_t<bool>>(gibbs), cpp11::as_cpp<cpp11::decay_t<bool>>(save_output), cpp11::as_cpp<cpp11::decay_t<int>>(index), cpp11::as_cpp<cpp11::decay_t<int>>(max_steps), cpp11::as_cpp<cpp11::decay_t<double>>(step_out), cpp11::as_cpp<cpp11::decay_t<const std::string&>>(propensity_seperate), cpp11::as_cpp<cpp11::decay_t<bool>>(regularize_ATE), cpp11::as_cpp<cpp11::decay_t<double>>(hn_scale)));
+  END_CPP11
+}
 // horseshoe_samplers_old.cpp
 cpp11::writable::list updateLinearTreatmentCpp_cpp_old(const cpp11::doubles_matrix<>& X, const cpp11::doubles& Z, const cpp11::doubles& propensity_train, cpp11::writable::doubles residual, const cpp11::r_vector<int>& are_continuous, double alpha, double gamma, cpp11::writable::doubles beta, cpp11::writable::doubles beta_int, cpp11::writable::doubles tau_beta, cpp11::writable::doubles nu, double xi, double tau_int, double sigma, double alpha_prior_sd, double tau_glob, const std::string& sample_global_prior, bool unlink, bool gibbs, bool save_output, int index, int max_steps, double step_out, const std::string& propensity_seperate, bool regularize_ATE, double hn_scale);
 extern "C" SEXP _stochtree_updateLinearTreatmentCpp_cpp_old(SEXP X, SEXP Z, SEXP propensity_train, SEXP residual, SEXP are_continuous, SEXP alpha, SEXP gamma, SEXP beta, SEXP beta_int, SEXP tau_beta, SEXP nu, SEXP xi, SEXP tau_int, SEXP sigma, SEXP alpha_prior_sd, SEXP tau_glob, SEXP sample_global_prior, SEXP unlink, SEXP gibbs, SEXP save_output, SEXP index, SEXP max_steps, SEXP step_out, SEXP propensity_seperate, SEXP regularize_ATE, SEXP hn_scale) {
@@ -1514,6 +1543,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_stochtree_create_column_vector_cpp",                            (DL_FUNC) &_stochtree_create_column_vector_cpp,                             1},
     {"_stochtree_create_forest_dataset_cpp",                           (DL_FUNC) &_stochtree_create_forest_dataset_cpp,                            0},
     {"_stochtree_create_rfx_dataset_cpp",                              (DL_FUNC) &_stochtree_create_rfx_dataset_cpp,                               0},
+    {"_stochtree_create_uplift_forest_dataset_cpp",                    (DL_FUNC) &_stochtree_create_uplift_forest_dataset_cpp,                     0},
     {"_stochtree_dataset_has_basis_cpp",                               (DL_FUNC) &_stochtree_dataset_has_basis_cpp,                                1},
     {"_stochtree_dataset_has_variance_weights_cpp",                    (DL_FUNC) &_stochtree_dataset_has_variance_weights_cpp,                     1},
     {"_stochtree_dataset_num_basis_cpp",                               (DL_FUNC) &_stochtree_dataset_num_basis_cpp,                                1},
@@ -1530,6 +1560,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_stochtree_forest_container_get_max_leaf_index_cpp",             (DL_FUNC) &_stochtree_forest_container_get_max_leaf_index_cpp,              2},
     {"_stochtree_forest_dataset_add_basis_cpp",                        (DL_FUNC) &_stochtree_forest_dataset_add_basis_cpp,                         2},
     {"_stochtree_forest_dataset_add_covariates_cpp",                   (DL_FUNC) &_stochtree_forest_dataset_add_covariates_cpp,                    2},
+    {"_stochtree_forest_dataset_add_treatment_cpp",                    (DL_FUNC) &_stochtree_forest_dataset_add_treatment_cpp,                     2},
     {"_stochtree_forest_dataset_add_weights_cpp",                      (DL_FUNC) &_stochtree_forest_dataset_add_weights_cpp,                       2},
     {"_stochtree_forest_dataset_update_basis_cpp",                     (DL_FUNC) &_stochtree_forest_dataset_update_basis_cpp,                      2},
     {"_stochtree_forest_tracker_cpp",                                  (DL_FUNC) &_stochtree_forest_tracker_cpp,                                   4},
@@ -1689,8 +1720,10 @@ static const R_CallMethodDef CallEntries[] = {
     {"_stochtree_subtract_from_column_vector_cpp",                     (DL_FUNC) &_stochtree_subtract_from_column_vector_cpp,                      2},
     {"_stochtree_sum_leaves_squared_ensemble_forest_container_cpp",    (DL_FUNC) &_stochtree_sum_leaves_squared_ensemble_forest_container_cpp,     2},
     {"_stochtree_tree_prior_cpp",                                      (DL_FUNC) &_stochtree_tree_prior_cpp,                                       4},
+    {"_stochtree_updateLinearTreatmentCpp_NCP_amr",                    (DL_FUNC) &_stochtree_updateLinearTreatmentCpp_NCP_amr,                    27},
     {"_stochtree_updateLinearTreatmentCpp_NCP_cpp",                    (DL_FUNC) &_stochtree_updateLinearTreatmentCpp_NCP_cpp,                    31},
     {"_stochtree_updateLinearTreatmentCpp_NCP_cpp_old",                (DL_FUNC) &_stochtree_updateLinearTreatmentCpp_NCP_cpp_old,                26},
+    {"_stochtree_updateLinearTreatmentCpp_amr",                        (DL_FUNC) &_stochtree_updateLinearTreatmentCpp_amr,                        27},
     {"_stochtree_updateLinearTreatmentCpp_cpp",                        (DL_FUNC) &_stochtree_updateLinearTreatmentCpp_cpp,                        31},
     {"_stochtree_updateLinearTreatmentCpp_cpp_old",                    (DL_FUNC) &_stochtree_updateLinearTreatmentCpp_cpp_old,                    26},
     {"_stochtree_update_alpha_tree_prior_cpp",                         (DL_FUNC) &_stochtree_update_alpha_tree_prior_cpp,                          2},

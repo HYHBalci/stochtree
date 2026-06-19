@@ -4,6 +4,10 @@ create_forest_dataset_cpp <- function() {
   .Call(`_stochtree_create_forest_dataset_cpp`)
 }
 
+create_uplift_forest_dataset_cpp <- function() {
+  .Call(`_stochtree_create_uplift_forest_dataset_cpp`)
+}
+
 dataset_num_rows_cpp <- function(dataset) {
   .Call(`_stochtree_dataset_num_rows_cpp`, dataset)
 }
@@ -38,6 +42,10 @@ forest_dataset_update_basis_cpp <- function(dataset_ptr, basis) {
 
 forest_dataset_add_weights_cpp <- function(dataset_ptr, weights) {
   invisible(.Call(`_stochtree_forest_dataset_add_weights_cpp`, dataset_ptr, weights))
+}
+
+forest_dataset_add_treatment_cpp <- function(dataset_ptr, treatment) {
+  invisible(.Call(`_stochtree_forest_dataset_add_treatment_cpp`, dataset_ptr, treatment))
 }
 
 create_column_vector_cpp <- function(outcome) {
@@ -566,6 +574,14 @@ run_ltr_mse_cpp <- function(tau_tilde, X, are_continuous, M, epsilon, beta_init,
 
 run_ltr_pg_cpp <- function(tau_tilde, X, are_continuous, M, epsilon, beta_init, beta_int_init, tau_beta_init, nu_init, tau_int_init, tau_glob_init, xi_init, unlink, n_iter, burn_in) {
   .Call(`_stochtree_run_ltr_pg_cpp`, tau_tilde, X, are_continuous, M, epsilon, beta_init, beta_int_init, tau_beta_init, nu_init, tau_int_init, tau_glob_init, xi_init, unlink, n_iter, burn_in)
+}
+
+updateLinearTreatmentCpp_amr <- function(X, Z, propensity_train, residual, obs_weights, are_continuous, alpha, gamma, beta, beta_int, tau_beta, nu, xi, tau_int, sigma, alpha_prior_sd, tau_glob, sample_global_prior, unlink, gibbs, save_output, index, max_steps, step_out, propensity_seperate, regularize_ATE, hn_scale) {
+  .Call(`_stochtree_updateLinearTreatmentCpp_amr`, X, Z, propensity_train, residual, obs_weights, are_continuous, alpha, gamma, beta, beta_int, tau_beta, nu, xi, tau_int, sigma, alpha_prior_sd, tau_glob, sample_global_prior, unlink, gibbs, save_output, index, max_steps, step_out, propensity_seperate, regularize_ATE, hn_scale)
+}
+
+updateLinearTreatmentCpp_NCP_amr <- function(X, Z, propensity_train, residual, obs_weights, are_continuous, alpha_tilde, gamma, beta_tilde, beta_int_tilde, tau_beta, nu, xi, tau_int, sigma, alpha_prior_sd, tau_glob, sample_global_prior, unlink, gibbs, save_output, index, max_steps, step_out, propensity_seperate, regularize_ATE, hn_scale) {
+  .Call(`_stochtree_updateLinearTreatmentCpp_NCP_amr`, X, Z, propensity_train, residual, obs_weights, are_continuous, alpha_tilde, gamma, beta_tilde, beta_int_tilde, tau_beta, nu, xi, tau_int, sigma, alpha_prior_sd, tau_glob, sample_global_prior, unlink, gibbs, save_output, index, max_steps, step_out, propensity_seperate, regularize_ATE, hn_scale)
 }
 
 updateLinearTreatmentCpp_cpp_old <- function(X, Z, propensity_train, residual, are_continuous, alpha, gamma, beta, beta_int, tau_beta, nu, xi, tau_int, sigma, alpha_prior_sd, tau_glob, sample_global_prior, unlink, gibbs, save_output, index, max_steps, step_out, propensity_seperate, regularize_ATE, hn_scale) {
