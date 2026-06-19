@@ -483,7 +483,7 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
         }
       }
     } else {
-      for(size_t j = 0; j < tau_beta.size(); j++) tau_beta[j] = 10.0;
+      for(size_t j = 0; j < tau_beta.size(); j++) tau_beta[j] = 1.0;
       tau_glob = 1.0;
     }
     
@@ -642,8 +642,8 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
         tau_beta[j] = tb_j_new;
         tau_beta_std[j] = tb_j_new;
       } else {
-        tau_beta[j] = 10.0;
-        tau_beta_std[j] = 10.0;
+        tau_beta[j] = 1.0;
+        tau_beta_std[j] = 1.0;
       }
     }
     
@@ -655,8 +655,8 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
           tau_beta[full_idx] = tb_k_new;
           tau_beta_std[full_idx] = tb_k_new;
         } else {
-          tau_beta[full_idx] = 10.0;
-          tau_beta_std[full_idx] = 10.0;
+          tau_beta[full_idx] = 1.0;
+          tau_beta_std[full_idx] = 1.0;
         }
       }
     }
@@ -990,7 +990,7 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_cpp_old(
         }
       }
     } else {
-      for(size_t j = 0; j < tau_beta.size(); j++) tau_beta[j] = 10.0;
+      for(size_t j = 0; j < tau_beta.size(); j++) tau_beta[j] = 1.0;
       tau_glob = 1.0;
     }
     
