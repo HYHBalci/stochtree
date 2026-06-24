@@ -325,7 +325,8 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
     // 2. Define prior variance matrix D (excluding sigma^2)
     Eigen::VectorXd D_diag(P_combined);
     for (int j = 0; j < p_mod + regularize_ATE; ++j) {
-      D_diag(j) = safe_var(tau_beta[j] * tau_beta[j] * tau_glob * tau_glob);
+      double tau_glob_main = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
+      D_diag(j) = safe_var(tau_beta[j] * tau_beta[j] * tau_glob_main * tau_glob_main);
     }
     for (size_t k = 0; k < int_pairs.size(); ++k) {
       double V_k_star = unlink ?
@@ -472,7 +473,8 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
           current_coeff = beta[j];
         }
         nu[j] = rinvgamma(1.0, 1.0 + 1.0 / safe_var(tau_beta[j]*tau_beta[j]));
-        tau_beta[j] = std::sqrt(safe_var(rinvgamma(1.0, (1.0 / safe_var(nu[j])) + (current_coeff * current_coeff) / safe_var(2.0 * tau_glob * tau_glob * sigma2))));
+        double tau_glob_main = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
+        tau_beta[j] = std::sqrt(safe_var(rinvgamma(1.0, (1.0 / safe_var(nu[j])) + (current_coeff * current_coeff) / safe_var(2.0 * tau_glob_main * tau_glob_main * sigma2))));
       }
       
       if(unlink){
@@ -488,14 +490,16 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
     }
     
     // 6. Sample global shrinkage parameter tau_glob
-    if (sample_global_prior == "half-cauchy") {
+    if (sample_global_prior == "half-cauchy" || sample_global_prior == "hybrid") {
       xi = rinvgamma(1.0, 1.0 + 1.0 / safe_var(tau_glob*tau_glob));
       double sum_scaled_sq_betas = 0.0;
-      if(regularize_ATE){
-        sum_scaled_sq_betas += (alpha*alpha) / safe_var(tau_beta[0] * tau_beta[0]);
-      }
-      for(int j = 0; j < p_mod; j++) {
-        sum_scaled_sq_betas += (beta[j]*beta[j]) / safe_var(tau_beta[j + regularize_ATE] * tau_beta[j + regularize_ATE]);
+      if (sample_global_prior != "hybrid") {
+        if(regularize_ATE){
+          sum_scaled_sq_betas += (alpha*alpha) / safe_var(tau_beta[0] * tau_beta[0]);
+        }
+        for(int j = 0; j < p_mod; j++) {
+          sum_scaled_sq_betas += (beta[j]*beta[j]) / safe_var(tau_beta[j + regularize_ATE] * tau_beta[j + regularize_ATE]);
+        }
       } 
       
       if(unlink){
@@ -508,7 +512,11 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
           sum_scaled_sq_betas += (beta_int[k] * beta_int[k]) / safe_var(var_k);
         }
       } 
-      double shape_tau_glob = (static_cast<double>(p_mod + p_int + regularize_ATE) + 1.0) / 2.0;
+      int num_params_for_tau_glob = p_int;
+      if (sample_global_prior != "hybrid") {
+        num_params_for_tau_glob += p_mod + regularize_ATE;
+      }
+      double shape_tau_glob = (static_cast<double>(num_params_for_tau_glob) + 1.0) / 2.0;
       double rate_tau_glob = (1.0 / safe_var(xi)) + (1.0 / safe_var(2.0 * sigma2)) * sum_scaled_sq_betas;
       tau_glob = std::sqrt(safe_var(rinvgamma(shape_tau_glob, rate_tau_glob)));
       
@@ -558,7 +566,8 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
     // 2. Define prior variance matrix D (excluding sigma^2)
     Eigen::VectorXd D_diag(P_combined);
     for (int j = 0; j < p_mod + regularize_ATE; ++j) {
-      D_diag(j) = safe_var(tau_beta[j] * tau_beta[j] * tau_glob * tau_glob);
+      double tau_glob_main = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
+      D_diag(j) = safe_var(tau_beta[j] * tau_beta[j] * tau_glob_main * tau_glob_main);
     }
     for (size_t k = 0; k < int_pairs.size(); ++k) {
       double V_k_star = unlink ?
@@ -845,10 +854,12 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_cpp_old(
       // Construct scaled design matrix X*
       Eigen::MatrixXd X_star(n, P_combined);
       if(regularize_ATE){
-        X_star.col(0) = Z_map.array() * tau_beta[0] * tau_glob;
+        double tau_glob_main = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
+        X_star.col(0) = Z_map.array() * tau_beta[0] * tau_glob_main;
       }
       for (int j = 0; j < p_mod; ++j) { 
-        X_star.col(j + regularize_ATE) = Z_map.array() * X_map.col(j).array() * tau_beta[j + regularize_ATE] * tau_glob;
+        double tau_glob_main = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
+        X_star.col(j + regularize_ATE) = Z_map.array() * X_map.col(j).array() * tau_beta[j + regularize_ATE] * tau_glob_main;
       } 
       for (size_t k = 0; k < int_pairs.size(); ++k) {
         double V_k_star_tau_only = unlink ?
@@ -892,10 +903,12 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_cpp_old(
       for (int i = 0; i < n; ++i) {
         Eigen::VectorXd x_row_star(P_combined);
         if(regularize_ATE){
-          x_row_star(0) = Z_map(i) * tau_beta[0] * tau_glob;
+          double tau_glob_main = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
+          x_row_star(0) = Z_map(i) * tau_beta[0] * tau_glob_main;
         }
         for (int j = 0; j < p_mod; ++j) {
-          x_row_star(j + regularize_ATE) = Z_map(i) * X_map(i, j) * tau_beta[j + regularize_ATE] * tau_glob;
+          double tau_glob_main = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
+          x_row_star(j + regularize_ATE) = Z_map(i) * X_map(i, j) * tau_beta[j + regularize_ATE] * tau_glob_main;
         }
         for (size_t k = 0; k < int_pairs.size(); ++k) {
           double V_k_star_tau_only = unlink ?
@@ -948,10 +961,12 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_cpp_old(
     // 4. Recalculate *real* coefficients and residual
     // (This step is vital before sampling taus)
     if(regularize_ATE) {
-      alpha_current = alpha_tilde * tau_beta[0] * tau_glob;
+      double tau_glob_main = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
+      alpha_current = alpha_tilde * tau_beta[0] * tau_glob_main;
     }
     for (int j = 0; j < p_mod; ++j) {
-      beta_current(j) = beta_tilde_map(j) * tau_beta[j + regularize_ATE] * tau_glob;
+      double tau_glob_main = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
+      beta_current(j) = beta_tilde_map(j) * tau_beta[j + regularize_ATE] * tau_glob_main;
     }
     for (size_t k = 0; k < int_pairs.size(); ++k) {
       double V_k_star_tau_only = unlink ?
@@ -979,7 +994,8 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_cpp_old(
           current_coeff_tilde = beta_tilde[j];
         }
         nu[j] = rinvgamma(1.0, 1.0 + 1.0 / safe_var(tau_beta[j]*tau_beta[j]));
-        tau_beta[j] = std::sqrt(safe_var(rinvgamma(1.0, (1.0 / safe_var(nu[j])) + (current_coeff_tilde * current_coeff_tilde) / safe_var(2.0 * tau_glob * tau_glob))));
+        double tau_glob_main = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
+        tau_beta[j] = std::sqrt(safe_var(rinvgamma(1.0, (1.0 / safe_var(nu[j])) + (current_coeff_tilde * current_coeff_tilde) / safe_var(2.0 * tau_glob_main * tau_glob_main))));
       }
       
       if(unlink){
@@ -996,14 +1012,16 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_cpp_old(
     
     // 6. Sample global shrinkage parameter tau_glob
     // *** THIS IS THE KEY NCP STEP: sigma2 IS REMOVED ***
-    if (sample_global_prior == "half-cauchy") {
+    if (sample_global_prior == "half-cauchy" || sample_global_prior == "hybrid") {
       xi = rinvgamma(1.0, 1.0 + 1.0 / safe_var(tau_glob*tau_glob));
       double sum_scaled_sq_betas_tilde = 0.0;
-      if(regularize_ATE){
-        sum_scaled_sq_betas_tilde += (alpha_tilde*alpha_tilde) / safe_var(tau_beta[0] * tau_beta[0]);
-      }
-      for(int j = 0; j < p_mod; j++) {
-        sum_scaled_sq_betas_tilde += (beta_tilde[j]*beta_tilde[j]) / safe_var(tau_beta[j + regularize_ATE] * tau_beta[j + regularize_ATE]);
+      if (sample_global_prior != "hybrid") {
+        if(regularize_ATE){
+          sum_scaled_sq_betas_tilde += (alpha_tilde*alpha_tilde) / safe_var(tau_beta[0] * tau_beta[0]);
+        }
+        for(int j = 0; j < p_mod; j++) {
+          sum_scaled_sq_betas_tilde += (beta_tilde[j]*beta_tilde[j]) / safe_var(tau_beta[j + regularize_ATE] * tau_beta[j + regularize_ATE]);
+        }
       } 
       
       if(unlink){
@@ -1016,7 +1034,11 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_cpp_old(
           sum_scaled_sq_betas_tilde += (beta_int_tilde[k] * beta_int_tilde[k]) / safe_var(var_k);
         }
       } 
-      double shape_tau_glob = (static_cast<double>(p_mod + p_int + regularize_ATE) + 1.0) / 2.0;
+      int num_params_for_tau_glob = p_int;
+      if (sample_global_prior != "hybrid") {
+        num_params_for_tau_glob += p_mod + regularize_ATE;
+      }
+      double shape_tau_glob = (static_cast<double>(num_params_for_tau_glob) + 1.0) / 2.0;
       double rate_tau_glob = (1.0 / safe_var(xi)) + (1.0 / safe_var(2.0)) * sum_scaled_sq_betas_tilde; // sigma2 removed
       tau_glob = std::sqrt(safe_var(rinvgamma(shape_tau_glob, rate_tau_glob)));
       

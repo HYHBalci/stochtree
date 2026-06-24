@@ -64,7 +64,7 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
     random_seed = -1, keep_burnin = FALSE, keep_gfr = FALSE, 
     keep_every = 1, num_chains = 1, verbose = T, sample_global_prior = "none", unlink = F, 
     propensity_seperate = "none", step_out = 0.5, max_steps = 50, gibbs = F, save_output = F, probit_outcome_model = F , interaction_rule = "continuous", standardize_cov = F, simple_prior = F, save_partial_residual = F, regularize_ATE = F, 
-    sigma_residual = 0, hn_scale = 0, n_tijn = 1, use_ncp = F
+    sigma_residual = 0, hn_scale = 0, n_tijn = 1, use_ncp = F, robust = FALSE, robust_nu = 3
   )
   general_params_updated <- preprocessParams(
     general_params_default, general_params
@@ -111,12 +111,18 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
   
   propensity_seperate <- match.arg(general_params_updated$propensity_seperate, choices = c("none", "mu", "tau"))
   save_partial_residual <- general_params_updated$save_partial_residual
+  robust <- general_params_updated$robust
+  robust_nu <- general_params_updated$robust_nu
+
+  if (robust && general_params_updated$probit_outcome_model) {
+    stop("Robust continuous outcomes (t-distribution) cannot be used simultaneously with the probit outcome model in this implementation.")
+  }
   
   # Data handling
   if(is.character(sample_global_prior)){
-    sample_global_prior <- match.arg(sample_global_prior, c("half-cauchy", "half-normal", "none", "OLS"))
+    sample_global_prior <- match.arg(sample_global_prior, c("half-cauchy", "half-normal", "none", "OLS", "hybrid"))
   } else {
-    stop("sample_global_prior must be a string: 'half-cauchy', 'half-normal', 'none', or 'OLS'")
+    stop("sample_global_prior must be a string: 'half-cauchy', 'half-normal', 'none', 'OLS', or 'hybrid'")
   }
   if(general_params_updated$verbose){
     print("Pre-Processing data!")
@@ -307,7 +313,18 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
   verbose <- general_params_updated$verbose
   probit_outcome_model <- general_params_updated$probit_outcome_model
   save_output <- general_params_updated$save_output
-  global_shrinkage <- general_params_updated$global_shrinkage 
+  global_shrinkage <- general_params_updated$global_shrinkage
+  if (!is.null(global_shrinkage)) {
+    if (global_shrinkage == "none") {
+      sample_global_prior <- "none"
+    } else if (global_shrinkage == "half-cauchy") {
+      sample_global_prior <- "half-cauchy"
+    } else if (global_shrinkage == "hybrid") {
+      sample_global_prior <- "hybrid"
+    } else if (global_shrinkage == "OLS") {
+      sample_global_prior <- "OLS"
+    }
+  }
   
   ## SAMPLER SETTINGS FOR LINEAR SLICE SAMPLER.
   max_steps <- general_params_updated$max_steps
@@ -993,7 +1010,8 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
   } else {
     propensity_train_for_cpp <- propensity_train
   }
-  
+
+  obs_weights <- rep(1.0, n)
   
   # Run GFR (warm start) if specified
   if (num_gfr > 0){
@@ -1030,6 +1048,30 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
         # Update outcome
         outcome_train$update_data(resid_train - forest_pred)
         current_sigma2 <- 1
+      }
+      
+      # Sample robust observation weights if requested
+      if (robust && !probit_outcome_model) {
+        mu_forest_pred <- active_forest_mu$predict(forest_dataset_train)
+        tau_forest_pred <- as.vector(as.matrix(full_design_matrix_train) %*% c(alpha, beta, beta_int))
+        forest_pred <- mu_forest_pred + Z_linear * tau_forest_pred
+        if (has_rfx) {
+          forest_pred <- forest_pred + rfx_model$predict(rfx_dataset_train, rfx_tracker_train)
+        }
+        full_residual <- resid_train - forest_pred
+        
+        if (include_variance_forest) {
+          var_pred <- active_forest_variance$predict(forest_dataset_train)
+        } else {
+          var_pred <- rep(1.0, n)
+        }
+        
+        shape_lambda <- (robust_nu + 1) / 2
+        rate_lambda <- (robust_nu + (full_residual^2) / (current_sigma2 * var_pred)) / 2
+        lambda <- rgamma(n, shape = shape_lambda, rate = rate_lambda)
+        
+        obs_weights <- 1.0 / lambda
+        forest_dataset_train$update_weights(obs_weights)
       }
       
       # Sample the prognostic forest
@@ -1071,7 +1113,33 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
       
       # Prepare parameters for C++ call
       if(use_ncp == TRUE){
-        update_results <- updateLinearTreatmentCpp_NCP_cpp_old(
+        update_results <- if(robust) updateLinearTreatmentCpp_NCP_amr(obs_weights = obs_weights, 
+          X = if (propensity_seperate == "tau") X_train else X_train_raw,
+          Z = Z_linear,
+          propensity_train = propensity_train, 
+          residual = tau_residual,
+          are_continuous = as.vector(as.integer(boolean_continuous*1)),
+          alpha_tilde = alpha, 
+          gamma = gamma,
+          beta_tilde = beta,
+          beta_int_tilde = beta_int,
+          tau_beta = tau_beta,
+          nu = nu,
+          xi = xi,
+          tau_int = 1.0,
+          sigma = sigma2_lin,
+          alpha_prior_sd = 10.0,
+          tau_glob = tau_glob,
+          sample_global_prior = sample_global_prior,
+          unlink = unlink,
+          gibbs = gibbs,
+          save_output = save_output,
+          index = sample_counter,
+          max_steps = max_steps,
+          step_out = step_out,
+          propensity_seperate = propensity_seperate,
+          regularize_ATE = regularize_ATE,
+          hn_scale = hn_scale) else updateLinearTreatmentCpp_NCP_cpp_old(
           X = if (propensity_seperate == "tau") X_train else X_train_raw,
           Z = Z_linear,
           propensity_train = propensity_train, 
@@ -1094,7 +1162,33 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           regularize_ATE = regularize_ATE,
           hn_scale = hn_scale)
       } else {
-        update_results <- updateLinearTreatmentCpp_cpp_old(
+        update_results <- if(robust) updateLinearTreatmentCpp_amr(obs_weights = obs_weights, 
+          X = if (propensity_seperate == "tau") X_train else X_train_raw,
+          Z = Z_linear,
+          propensity_train = propensity_train,
+          residual = tau_residual,
+          are_continuous = as.vector(as.integer(boolean_continuous*1)),
+          alpha = alpha,
+          gamma = gamma,
+          beta = beta,
+          beta_int = beta_int,
+          tau_beta = tau_beta,
+          nu = nu,
+          xi = xi,
+          tau_int = tau_int,
+          sigma = sigma2_lin,
+          alpha_prior_sd = 10.0,
+          tau_glob = tau_glob,
+          sample_global_prior = sample_global_prior,
+          unlink = unlink,
+          gibbs = gibbs,
+          save_output = save_output,
+          index = sample_counter,
+          max_steps = max_steps,
+          step_out = step_out,
+          propensity_seperate = propensity_seperate,
+          regularize_ATE = regularize_ATE,
+          hn_scale = hn_scale) else updateLinearTreatmentCpp_cpp_old(
           X = if (propensity_seperate == "tau") X_train else X_train_raw,
           Z = Z_linear,
           propensity_train = propensity_train,
@@ -1424,6 +1518,30 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           current_sigma2 <- 1
         }
         
+        # Sample robust observation weights if requested
+        if (robust && !probit_outcome_model) {
+          mu_forest_pred <- active_forest_mu$predict(forest_dataset_train)
+          tau_forest_pred <- as.vector(as.matrix(full_design_matrix_train) %*% c(alpha, beta, beta_int))
+          forest_pred <- mu_forest_pred + Z_linear * tau_forest_pred
+          if (has_rfx) {
+            forest_pred <- forest_pred + rfx_model$predict(rfx_dataset_train, rfx_tracker_train)
+          }
+          full_residual <- resid_train - forest_pred
+          
+          if (include_variance_forest) {
+            var_pred <- active_forest_variance$predict(forest_dataset_train)
+          } else {
+            var_pred <- rep(1.0, n)
+          }
+          
+          shape_lambda <- (robust_nu + 1) / 2
+          rate_lambda <- (robust_nu + (full_residual^2) / (current_sigma2 * var_pred)) / 2
+          lambda <- rgamma(n, shape = shape_lambda, rate = rate_lambda)
+          
+          obs_weights <- 1.0 / lambda
+          forest_dataset_train$update_weights(obs_weights)
+        }
+        
         # Sample the prognostic forest
         forest_model_mu$sample_one_iteration(
           forest_dataset = forest_dataset_train, residual = outcome_train, forest_samples = forest_samples_mu, 
@@ -1461,7 +1579,33 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
         # Linear Update Call (Repeated n_tijn times)
         for(v in 1:n_tijn){
           if(use_ncp){
-            update_results <- updateLinearTreatmentCpp_NCP_cpp_old(
+            update_results <- if(robust) updateLinearTreatmentCpp_NCP_amr(obs_weights = obs_weights, 
+          X = if (propensity_seperate == "tau") X_train else X_train_raw,
+          Z = Z_linear,
+          propensity_train = propensity_train, 
+          residual = tau_residual,
+          are_continuous = as.vector(as.integer(boolean_continuous*1)),
+          alpha_tilde = alpha, 
+          gamma = gamma,
+          beta_tilde = beta,
+          beta_int_tilde = beta_int,
+          tau_beta = tau_beta,
+          nu = nu,
+          xi = xi,
+          tau_int = 1.0,
+          sigma = sigma2_lin,
+          alpha_prior_sd = 10.0,
+          tau_glob = tau_glob,
+          sample_global_prior = sample_global_prior,
+          unlink = unlink,
+          gibbs = gibbs,
+          save_output = save_output,
+          index = sample_counter,
+          max_steps = max_steps,
+          step_out = step_out,
+          propensity_seperate = propensity_seperate,
+          regularize_ATE = regularize_ATE,
+          hn_scale = hn_scale) else updateLinearTreatmentCpp_NCP_cpp_old(
               X = if (propensity_seperate == "tau") X_train else X_train_raw,
               Z = Z_linear,
               propensity_train = propensity_train, 
@@ -1485,7 +1629,33 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
               hn_scale = hn_scale)
             
           } else {
-            update_results <- updateLinearTreatmentCpp_cpp_old(
+            update_results <- if(robust) updateLinearTreatmentCpp_amr(obs_weights = obs_weights, 
+          X = if (propensity_seperate == "tau") X_train else X_train_raw,
+          Z = Z_linear,
+          propensity_train = propensity_train,
+          residual = tau_residual,
+          are_continuous = as.vector(as.integer(boolean_continuous*1)),
+          alpha = alpha,
+          gamma = gamma,
+          beta = beta,
+          beta_int = beta_int,
+          tau_beta = tau_beta,
+          nu = nu,
+          xi = xi,
+          tau_int = tau_int,
+          sigma = sigma2_lin,
+          alpha_prior_sd = 10.0,
+          tau_glob = tau_glob,
+          sample_global_prior = sample_global_prior,
+          unlink = unlink,
+          gibbs = gibbs,
+          save_output = save_output,
+          index = sample_counter,
+          max_steps = max_steps,
+          step_out = step_out,
+          propensity_seperate = propensity_seperate,
+          regularize_ATE = regularize_ATE,
+          hn_scale = hn_scale) else updateLinearTreatmentCpp_cpp_old(
               X = if (propensity_seperate == "tau") X_train else X_train_raw,
               Z = Z_linear,
               propensity_train = propensity_train,
@@ -1562,12 +1732,20 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           tau_beta_main_indices <- (1 + ate_offset):(p_mod + ate_offset)
           
           if(regularize_ATE) {
-            alpha_real <- alpha * tau_beta[1] * tau_glob
+            if (sample_global_prior == "hybrid") {
+              alpha_real <- alpha * tau_beta[1]
+            } else {
+              alpha_real <- alpha * tau_beta[1] * tau_glob
+            }
           } else {
             alpha_real <- alpha
           }
           
-          beta_real <- beta * tau_beta[tau_beta_main_indices] * tau_glob
+          if (sample_global_prior == "hybrid") {
+            beta_real <- beta * tau_beta[tau_beta_main_indices]
+          } else {
+            beta_real <- beta * tau_beta[tau_beta_main_indices] * tau_glob
+          }
           
           if(p_int > 0) {
             if(unlink) {

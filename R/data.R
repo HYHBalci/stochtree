@@ -39,6 +39,13 @@ ForestDataset <- R6::R6Class(
         }, 
         
         #' @description
+        #' Update variance weights in a dataset
+        #' @param weights Updated vector of observation-specific variance weights
+        update_weights = function(weights) {
+            forest_dataset_add_weights_cpp(self$data_ptr, weights)
+        }, 
+        
+        #' @description
         #' Return number of observations in a `ForestDataset` object
         #' @return Observation count
         num_observations = function() {
