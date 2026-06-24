@@ -1184,6 +1184,32 @@ bcf_linear_probit_DR <- function(X_train, Z_train, y_train, propensity_train = N
   } else {
     propensity_train_for_cpp <- propensity_train
   }
+
+  # Precompute X_design and XtX_design for C++
+  X_main_for_design <- if (propensity_seperate == "tau") X_train else X_train_raw
+  
+  compute_design_matrices <- function(Z_lin, X_main) {
+    Xd <- matrix(nrow = n, ncol = 0)
+    if (regularize_ATE) {
+      Xd <- cbind(Xd, as.vector(Z_lin))
+    }
+    Xd <- cbind(Xd, as.vector(Z_lin) * X_main)
+    if (p_int > 0) {
+      X_int <- matrix(nrow = n, ncol = p_int)
+      for (k in 1:p_int) {
+        X_int[, k] <- X_main[, int_pairs_matrix[1, k]] * X_main[, int_pairs_matrix[2, k]]
+      }
+      Xd <- cbind(Xd, as.vector(Z_lin) * X_int)
+    }
+    XtXd <- crossprod(Xd)
+    return(list(X_design = Xd, XtX_design = XtXd))
+  }
+  
+  Z_linear <- Z_train
+  design_mats <- compute_design_matrices(Z_linear, X_main_for_design)
+  X_design <- design_mats$X_design
+  XtX_design <- design_mats$XtX_design
+
   
   
   # Run GFR (warm start) if specified
@@ -1203,6 +1229,9 @@ bcf_linear_probit_DR <- function(X_train, Z_train, y_train, propensity_train = N
       # Sample the treatment forest
       if(adaptive_coding){
         Z_linear <- tau_basis_train
+        design_mats <- compute_design_matrices(Z_linear, X_main_for_design)
+        X_design <- design_mats$X_design
+        XtX_design <- design_mats$XtX_design
       } else {
         Z_linear <- Z_train
       }
@@ -1285,6 +1314,9 @@ bcf_linear_probit_DR <- function(X_train, Z_train, y_train, propensity_train = N
       # Sample the treatment forest
       if(adaptive_coding){
         Z_linear <- tau_basis_train
+        design_mats <- compute_design_matrices(Z_linear, X_main_for_design)
+        X_design <- design_mats$X_design
+        XtX_design <- design_mats$XtX_design
       } else {
         Z_linear <- Z_train
       }
@@ -1301,17 +1333,23 @@ bcf_linear_probit_DR <- function(X_train, Z_train, y_train, propensity_train = N
       }
       if(use_ncp == TRUE){
         update_results <- updateLinearTreatmentCpp_NCP_cpp(
+          X_design = X_design,
+          XtX_design = XtX_design,
           X = if (propensity_seperate == "tau") X_train else X_train_raw,
+          Phi = matrix(0),
           Z = Z_linear - propensity_train,
           propensity_train = propensity_train, 
           residual = tau_residual,
           are_continuous = as.vector(as.integer(boolean_continuous*1)),
           alpha_tilde = alpha, 
-          gamma = gamma,
+          gamma_prop = gamma,
           beta_tilde = beta,
           beta_int_tilde = beta_int,
+          gamma_tilde = numeric(0),
           tau_beta = tau_beta,
+          tau_gamma = numeric(0),
           nu = nu,
+          nu_gamma = numeric(0),
           xi = xi,
           tau_int = 1.0,
           sigma = sigma2_lin,
@@ -1326,17 +1364,23 @@ bcf_linear_probit_DR <- function(X_train, Z_train, y_train, propensity_train = N
         
         
         update_results <- updateLinearTreatmentCpp_cpp(
+          X_design = X_design,
+          XtX_design = XtX_design,
           X = if (propensity_seperate == "tau") X_train else X_train_raw,
+          Phi = matrix(0),
           Z = Z_linear - propensity_train,
           propensity_train = propensity_train,
           residual = tau_residual,
           are_continuous = as.vector(as.integer(boolean_continuous*1)),
           alpha = alpha,
-          gamma = gamma,
+          gamma_prop = gamma,
           beta = beta,
           beta_int = beta_int,
+          gamma = numeric(0),
           tau_beta = tau_beta,
+          tau_gamma = numeric(0),
           nu = nu,
+          nu_gamma = numeric(0),
           xi = xi,
           tau_int = tau_int,
           sigma = sigma2_lin,
@@ -1351,7 +1395,7 @@ bcf_linear_probit_DR <- function(X_train, Z_train, y_train, propensity_train = N
           step_out = step_out,
           propensity_seperate = propensity_seperate,
           regularize_ATE = regularize_ATE,
-          hn_scale = hn_scale
+          hn_scale = hn_scale, use_prognostic_shapley = FALSE
           
         )}
       
@@ -1624,6 +1668,9 @@ bcf_linear_probit_DR <- function(X_train, Z_train, y_train, propensity_train = N
         # Sample the treatment forest
         if(adaptive_coding){
           Z_linear <- tau_basis_train
+        design_mats <- compute_design_matrices(Z_linear, X_main_for_design)
+        X_design <- design_mats$X_design
+        XtX_design <- design_mats$XtX_design
         } else {
           Z_linear <- Z_train
         }
@@ -1744,7 +1791,10 @@ bcf_linear_probit_DR <- function(X_train, Z_train, y_train, propensity_train = N
         }
         if(use_ncp){
           update_results <- updateLinearTreatmentCpp_NCP_cpp(
-            X = if (propensity_seperate == "tau") X_train else X_train_raw,
+            X_design = X_design,
+          XtX_design = XtX_design,
+          X = if (propensity_seperate == "tau") X_train else X_train_raw,
+            Phi = matrix(0),
             Z = Z_linear - propensity_train,
             propensity_train = propensity_train, 
             residual = tau_residual,
@@ -1769,17 +1819,23 @@ bcf_linear_probit_DR <- function(X_train, Z_train, y_train, propensity_train = N
         } else {
           for(v in 1:n_tijn){
             update_results <- updateLinearTreatmentCpp_cpp(
-              X = if (propensity_seperate == "tau") X_train else X_train_raw,
+              X_design = X_design,
+          XtX_design = XtX_design,
+          X = if (propensity_seperate == "tau") X_train else X_train_raw,
+              Phi = matrix(0),
               Z = Z_linear - propensity_train,
               propensity_train = propensity_train,
               residual = tau_residual,
               are_continuous = as.vector(as.integer(boolean_continuous*1)),
               alpha = alpha,
-              gamma = gamma,
+              gamma_prop = gamma,
               beta = beta,
               beta_int = beta_int,
+              gamma = numeric(0),
               tau_beta = tau_beta,
+              tau_gamma = numeric(0),
               nu = nu,
+              nu_gamma = numeric(0),
               xi = xi,
               tau_int = tau_int,
               sigma = sigma2_lin,
@@ -1794,7 +1850,7 @@ bcf_linear_probit_DR <- function(X_train, Z_train, y_train, propensity_train = N
               step_out = step_out,
               propensity_seperate = propensity_seperate,
               regularize_ATE = regularize_ATE,
-              hn_scale = hn_scale
+              hn_scale = hn_scale, use_prognostic_shapley = FALSE
               
             )
             beta_start <- 6

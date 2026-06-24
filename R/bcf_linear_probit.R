@@ -1037,7 +1037,7 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
         # Sample latent probit variable, z | -
         mu_forest_pred <- active_forest_mu$predict(forest_dataset_train)
         tau_forest_pred <- as.vector(as.matrix(full_design_matrix_train) %*% c(alpha, beta, beta_int))
-        forest_pred <- mu_forest_pred + Z_linear*tau_forest_pred
+        forest_pred <- mu_forest_pred + Z_linear*tau_forest_pred
         mu0 <- forest_pred[y_train == 0]
         mu1 <- forest_pred[y_train == 1]
         u0 <- runif(sum(y_train == 0), 0, pnorm(0 - mu0))
@@ -1054,7 +1054,7 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
       if (robust && !probit_outcome_model) {
         mu_forest_pred <- active_forest_mu$predict(forest_dataset_train)
         tau_forest_pred <- as.vector(as.matrix(full_design_matrix_train) %*% c(alpha, beta, beta_int))
-        forest_pred <- mu_forest_pred + Z_linear * tau_forest_pred
+        forest_pred <- mu_forest_pred + Z_linear * tau_forest_pred
         if (has_rfx) {
           forest_pred <- forest_pred + rfx_model$predict(rfx_dataset_train, rfx_tracker_train)
         }
@@ -1070,7 +1070,7 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
         rate_lambda <- (robust_nu + (full_residual^2) / (current_sigma2 * var_pred)) / 2
         lambda <- rgamma(n, shape = shape_lambda, rate = rate_lambda)
         
-        obs_weights <- 1.0 / lambda
+        obs_weights <- lambda
         forest_dataset_train$update_weights(obs_weights)
       }
       
@@ -1159,6 +1159,11 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           sample_global_prior = sample_global_prior,
           unlink = unlink,
           gibbs = gibbs, # Moet TRUE zijn voor NCP
+          save_output = save_output,
+          index = sample_counter,
+          max_steps = max_steps,
+          step_out = step_out,
+          propensity_seperate = propensity_seperate,
           regularize_ATE = regularize_ATE,
           hn_scale = hn_scale)
       } else {
@@ -1505,7 +1510,7 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           # come here
           tau_forest_pred <- as.vector(as.matrix(full_design_matrix_train)  %*% c(alpha, beta, beta_int))
           
-          forest_pred <- mu_forest_pred + Z_linear*tau_forest_pred
+          forest_pred <- mu_forest_pred + Z_linear*tau_forest_pred
           mu0 <- forest_pred[y_train == 0]
           mu1 <- forest_pred[y_train == 1]
           u0 <- runif(sum(y_train == 0), 0, pnorm(0 - mu0))
@@ -1522,7 +1527,7 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
         if (robust && !probit_outcome_model) {
           mu_forest_pred <- active_forest_mu$predict(forest_dataset_train)
           tau_forest_pred <- as.vector(as.matrix(full_design_matrix_train) %*% c(alpha, beta, beta_int))
-          forest_pred <- mu_forest_pred + Z_linear * tau_forest_pred
+          forest_pred <- mu_forest_pred + Z_linear * tau_forest_pred
           if (has_rfx) {
             forest_pred <- forest_pred + rfx_model$predict(rfx_dataset_train, rfx_tracker_train)
           }
@@ -1538,7 +1543,7 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           rate_lambda <- (robust_nu + (full_residual^2) / (current_sigma2 * var_pred)) / 2
           lambda <- rgamma(n, shape = shape_lambda, rate = rate_lambda)
           
-          obs_weights <- 1.0 / lambda
+          obs_weights <- lambda
           forest_dataset_train$update_weights(obs_weights)
         }
         
@@ -1625,6 +1630,11 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
               sample_global_prior = sample_global_prior,
               unlink = unlink,
               gibbs = gibbs, 
+              save_output = save_output,
+              index = sample_counter,
+              max_steps = max_steps,
+              step_out = step_out,
+              propensity_seperate = propensity_seperate,
               regularize_ATE = regularize_ATE,
               hn_scale = hn_scale)
             
@@ -1897,7 +1907,7 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
     tau_x_raw_train <- as.vector(as.matrix(full_design_matrix_train) %*% c(alpha, beta, beta_int))
     tau_hat_train <- tau_x_raw_train
   }
-  y_hat_train <- mu_hat_train + as.vector(as.matrix(full_design_matrix_train) %*% c(alpha, beta, beta_int))* as.numeric(Z_train)
+  y_hat_train <- mu_hat_train + as.vector(as.matrix(full_design_matrix_train) %*% c(alpha, beta, beta_int))* as.numeric(Z_train)
   if (has_test) {
     mu_hat_test <- forest_samples_mu$predict(forest_dataset_test)*y_std_train + y_bar_train
     if (adaptive_coding) {
@@ -1906,7 +1916,7 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
     } else {
       tau_hat_test <- forest_samples_tau$predict_raw(forest_dataset_test)*y_std_train
     }
-    y_hat_test <- mu_hat_test + tau_hat_test * as.numeric(Z_test)
+    y_hat_test <- mu_hat_test + tau_hat_test * as.numeric(Z_test)
   }
   if (include_variance_forest) {
     sigma2_x_hat_train <- forest_samples_variance$predict(forest_dataset_train)

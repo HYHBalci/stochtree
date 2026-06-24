@@ -7,7 +7,7 @@
 standardize_X_by_index(
   X_initial,
   process_data = TRUE,
-  interaction_rule = c("continuous", "continuous_or_binary", "all"),
+  interaction_rule = c("continuous", "continuous_or_binary", "all", "none"),
   cat_coding_method = c("sum", "difference")
 )
 }

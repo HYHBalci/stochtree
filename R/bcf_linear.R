@@ -927,6 +927,9 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
       # Sample the treatment forest
       if(adaptive_coding){
         Z_linear <- tau_basis_train
+        design_mats <- compute_design_matrices(Z_linear, X_main_for_design)
+        X_design <- design_mats$X_design
+        XtX_design <- design_mats$XtX_design
       } else {
         Z_linear <- Z_train
       }
@@ -1267,6 +1270,9 @@ bcf_linear <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_g
         # Sample the treatment forest
         if(adaptive_coding){
           Z_linear <- tau_basis_train
+        design_mats <- compute_design_matrices(Z_linear, X_main_for_design)
+        X_design <- design_mats$X_design
+        XtX_design <- design_mats$XtX_design
         } else {
           Z_linear <- Z_train
         }

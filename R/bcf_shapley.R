@@ -1114,6 +1114,32 @@ bcf_linear_shapley <- function(X_train, Z_train, y_train, propensity_train = NUL
   } else {
     propensity_train_for_cpp <- propensity_train
   }
+
+  # Precompute X_design and XtX_design for C++
+  X_main_for_design <- if (propensity_seperate == "tau") X_train else X_train_raw
+  
+  compute_design_matrices <- function(Z_lin, X_main) {
+    Xd <- matrix(nrow = n, ncol = 0)
+    if (regularize_ATE) {
+      Xd <- cbind(Xd, as.vector(Z_lin))
+    }
+    Xd <- cbind(Xd, as.vector(Z_lin) * X_main)
+    if (p_int > 0) {
+      X_int <- matrix(nrow = n, ncol = p_int)
+      for (k in 1:p_int) {
+        X_int[, k] <- X_main[, int_pairs_matrix[1, k]] * X_main[, int_pairs_matrix[2, k]]
+      }
+      Xd <- cbind(Xd, as.vector(Z_lin) * X_int)
+    }
+    XtXd <- crossprod(Xd)
+    return(list(X_design = Xd, XtX_design = XtXd))
+  }
+  
+  Z_linear <- Z_train
+  design_mats <- compute_design_matrices(Z_linear, X_main_for_design)
+  X_design <- design_mats$X_design
+  XtX_design <- design_mats$XtX_design
+
   
   
   # Run GFR (warm start) if specified
@@ -1132,6 +1158,9 @@ bcf_linear_shapley <- function(X_train, Z_train, y_train, propensity_train = NUL
       # 1. Update Treatment Coding (if adaptive)
       if(adaptive_coding){
         Z_linear <- tau_basis_train
+        design_mats <- compute_design_matrices(Z_linear, X_main_for_design)
+        X_design <- design_mats$X_design
+        XtX_design <- design_mats$XtX_design
       } else {
         Z_linear <- Z_train
       }
@@ -1215,6 +1244,8 @@ bcf_linear_shapley <- function(X_train, Z_train, y_train, propensity_train = NUL
       
       if(use_ncp == TRUE){
         update_results <- updateLinearTreatmentCpp_NCP_cpp(
+          X_design = X_design,
+          XtX_design = XtX_design,
           X = if (propensity_seperate == "tau") X_train else X_train_raw,
           Phi = Phi_train,
           Z = Z_linear,
@@ -1244,6 +1275,8 @@ bcf_linear_shapley <- function(X_train, Z_train, y_train, propensity_train = NUL
         )
       } else {
         update_results <- updateLinearTreatmentCpp_cpp(
+          X_design = X_design,
+          XtX_design = XtX_design,
           X = if (propensity_seperate == "tau") X_train else X_train_raw,
           Phi = Phi_train,
           Z = Z_linear,
@@ -1569,6 +1602,9 @@ bcf_linear_shapley <- function(X_train, Z_train, y_train, propensity_train = NUL
         # Sample the treatment forest
         if(adaptive_coding){
           Z_linear <- tau_basis_train
+        design_mats <- compute_design_matrices(Z_linear, X_main_for_design)
+        X_design <- design_mats$X_design
+        XtX_design <- design_mats$XtX_design
         } else {
           Z_linear <- Z_train
         }
@@ -1685,7 +1721,9 @@ bcf_linear_shapley <- function(X_train, Z_train, y_train, propensity_train = NUL
         
         if(use_ncp == TRUE){
           update_results <- updateLinearTreatmentCpp_NCP_cpp(
-            X = if (propensity_seperate == "tau") X_train else X_train_raw,
+            X_design = X_design,
+          XtX_design = XtX_design,
+          X = if (propensity_seperate == "tau") X_train else X_train_raw,
             Phi = Phi_train,
             Z = Z_linear,
             propensity_train = propensity_train, 
@@ -1714,7 +1752,9 @@ bcf_linear_shapley <- function(X_train, Z_train, y_train, propensity_train = NUL
           )
         } else {
           update_results <- updateLinearTreatmentCpp_cpp(
-            X = if (propensity_seperate == "tau") X_train else X_train_raw,
+            X_design = X_design,
+          XtX_design = XtX_design,
+          X = if (propensity_seperate == "tau") X_train else X_train_raw,
             Phi = Phi_train,
             Z = Z_linear,
             propensity_train = propensity_train,

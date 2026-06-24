@@ -348,8 +348,8 @@ cpp11::writable::list updateLinearTreatmentCpp_amr(
       }
       
       double sigma2 = sigma * sigma;
-      Eigen::MatrixXd D_scaled_mat = D_mat / sigma2; // Create the scaled prior covariance
-      Eigen::VectorXd D_scaled_diag = D_diag / sigma2;
+      Eigen::MatrixXd D_scaled_mat = D_mat; // Create the scaled prior covariance
+      Eigen::VectorXd D_scaled_diag = D_diag;
       
       Eigen::VectorXd u(P_combined);
       for (int j = 0; j < P_combined; ++j) u(j) = Rf_rnorm(0.0, std::sqrt(D_scaled_diag(j)));
@@ -366,7 +366,11 @@ cpp11::writable::list updateLinearTreatmentCpp_amr(
       
       Eigen::LLT<Eigen::MatrixXd> lltOfM(M_solve);
       if (lltOfM.info() != Eigen::Success) {
-        cpp11::warning("Cholesky of n x n system failed in fast sampler. Betas not updated.");
+        M_solve.diagonal().array() += 1e-6; 
+        lltOfM.compute(M_solve);
+      }
+      if (lltOfM.info() != Eigen::Success) {
+        cpp11::warning("Cholesky of n x n system failed in fast sampler even with jitter. Betas not updated.");
       } else { 
         Eigen::VectorXd w = lltOfM.solve(y_target_scaled - v);
         Eigen::VectorXd beta_tilde_new = u + D_scaled_mat * X_combined.transpose() * w;
@@ -390,8 +394,8 @@ cpp11::writable::list updateLinearTreatmentCpp_amr(
       // Step A: Calculate XtX and Xt_y on the fly
       Eigen::MatrixXd XtX = Eigen::MatrixXd::Zero(P_combined, P_combined);
       Eigen::VectorXd Xt_y = Eigen::VectorXd::Zero(P_combined);
+      Eigen::VectorXd x_row_combined(P_combined);
       for (int i = 0; i < n; ++i) {
-        Eigen::VectorXd x_row_combined(P_combined);
         if(regularize_ATE){
           x_row_combined(0) = Z_map(i);
         }
@@ -409,8 +413,7 @@ cpp11::writable::list updateLinearTreatmentCpp_amr(
       Eigen::VectorXd D_inv_diag = D_diag.cwiseInverse();
       
       
-      Eigen::MatrixXd Prec = XtX / sigma2; //[Sigma Scaling is important]
-      Prec.diagonal() += D_inv_diag;
+      Eigen::MatrixXd Prec = (XtX + Eigen::MatrixXd(D_inv_diag.asDiagonal())) / sigma2; //[Sigma Scaling is important]
       
       Eigen::LLT<Eigen::MatrixXd> lltOfA(Prec);
       
@@ -456,7 +459,18 @@ cpp11::writable::list updateLinearTreatmentCpp_amr(
     residual_map = y_target - new_fit;
     
     // 5. Sample local shrinkage parameters tau_beta (and nu)
-    if (sample_global_prior != "OLS") {
+    if (sample_global_prior == "hybrid") {
+      for(int j = 0; j < p_mod + regularize_ATE; j++){
+        tau_beta[j] = 10.0;
+      }
+      if(unlink){
+        for(size_t k = 0; k < int_pairs.size(); k++){
+          int full_idx = p_mod + k + regularize_ATE;
+          nu[full_idx] = rinvgamma_amr(1.0, 1.0 + 1.0 / safe_var(tau_beta[full_idx]*tau_beta[full_idx]));
+          tau_beta[full_idx] = std::sqrt(safe_var(rinvgamma_amr(1.0, (1.0 / safe_var(nu[full_idx])) + (beta_int[k] * beta_int[k]) / safe_var(2.0 * tau_glob * tau_glob * sigma2))));
+        }
+      }
+    } else if (sample_global_prior != "OLS") {
       for(int j = 0; j < p_mod + regularize_ATE; j++){
         double current_coeff;
         if (regularize_ATE) {
@@ -481,27 +495,35 @@ cpp11::writable::list updateLinearTreatmentCpp_amr(
     }
     
     // 6. Sample global shrinkage parameter tau_glob
-    if (sample_global_prior == "half-cauchy") {
+    if (sample_global_prior == "half-cauchy" || sample_global_prior == "hybrid") {
       xi = rinvgamma_amr(1.0, 1.0 + 1.0 / safe_var(tau_glob*tau_glob));
       double sum_scaled_sq_betas = 0.0;
-      if(regularize_ATE){
-        sum_scaled_sq_betas += (alpha*alpha) / safe_var(tau_beta[0] * tau_beta[0]);
+      double shape_tau_glob = 1.0 / 2.0;
+      
+      if (sample_global_prior != "hybrid") {
+        if(regularize_ATE){
+          sum_scaled_sq_betas += (alpha*alpha) / safe_var(tau_beta[0] * tau_beta[0]);
+          shape_tau_glob += 0.5;
+        }
+        for(int j = 0; j < p_mod; j++) {
+          sum_scaled_sq_betas += (beta[j]*beta[j]) / safe_var(tau_beta[j + regularize_ATE] * tau_beta[j + regularize_ATE]);
+          shape_tau_glob += 0.5;
+        }
       }
-      for(int j = 0; j < p_mod; j++) {
-        sum_scaled_sq_betas += (beta[j]*beta[j]) / safe_var(tau_beta[j + regularize_ATE] * tau_beta[j + regularize_ATE]);
-      } 
       
       if(unlink){
         for(int k = 0; k < p_int; k++) {
           sum_scaled_sq_betas += (beta_int[k] * beta_int[k]) / safe_var(tau_beta[p_mod + regularize_ATE + k] * tau_beta[p_mod + regularize_ATE + k]);
+          shape_tau_glob += 0.5;
         } 
-      } else {
+      } else if (sample_global_prior != "hybrid") {
         for(size_t k = 0; k < int_pairs.size(); ++k) {
           double var_k = tau_int * tau_beta[regularize_ATE + int_pairs[k].first] * tau_beta[regularize_ATE + int_pairs[k].second];
           sum_scaled_sq_betas += (beta_int[k] * beta_int[k]) / safe_var(var_k);
+          shape_tau_glob += 0.5;
         }
       } 
-      double shape_tau_glob = (static_cast<double>(p_mod + p_int + regularize_ATE) + 1.0) / 2.0;
+      
       double rate_tau_glob = (1.0 / safe_var(xi)) + (1.0 / safe_var(2.0 * sigma2)) * sum_scaled_sq_betas;
       tau_glob = std::sqrt(safe_var(rinvgamma_amr(shape_tau_glob, rate_tau_glob)));
       
@@ -566,8 +588,8 @@ cpp11::writable::list updateLinearTreatmentCpp_amr(
     // Step A: Calculate XtX and Xt_y
     Eigen::MatrixXd XtX = Eigen::MatrixXd::Zero(P_combined, P_combined);
     Eigen::VectorXd Xt_y = Eigen::VectorXd::Zero(P_combined);
+    Eigen::VectorXd x_row_combined(P_combined); // Brought outside loop
     for (int i = 0; i < n; ++i) {
-      Eigen::VectorXd x_row_combined(P_combined); // Declaration inside loop for clarity
       if(regularize_ATE){
         x_row_combined(0) = Z_map(i);
       }
@@ -869,7 +891,11 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_amr(
       
       Eigen::LLT<Eigen::MatrixXd> lltOfM(M_solve);
       if (lltOfM.info() != Eigen::Success) {
-        cpp11::warning("Cholesky of n x n system failed in NCP fast sampler. Betas not updated.");
+        M_solve.diagonal().array() += 1e-6; 
+        lltOfM.compute(M_solve);
+      }
+      if (lltOfM.info() != Eigen::Success) {
+        cpp11::warning("Cholesky of n x n system failed in NCP fast sampler even with jitter. Betas not updated.");
       } else { 
         Eigen::VectorXd w = lltOfM.solve(y_target_scaled - v);
         beta_tilde_combined_new_eigen = u + X_star_scaled.transpose() * w;
@@ -883,8 +909,8 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_amr(
       // Step A: Calculate X*tX* and X*t_y
       Eigen::MatrixXd XtX_star = Eigen::MatrixXd::Zero(P_combined, P_combined);
       Eigen::VectorXd Xt_y_star = Eigen::VectorXd::Zero(P_combined);
+      Eigen::VectorXd x_row_star(P_combined);
       for (int i = 0; i < n; ++i) {
-        Eigen::VectorXd x_row_star(P_combined);
         if(regularize_ATE){
           x_row_star(0) = Z_map(i) * tau_beta[0] * tau_glob;
         }
@@ -964,7 +990,18 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_amr(
     
     // 5. Sample local shrinkage parameters tau_beta (and nu)
     // *** THIS IS THE KEY NCP STEP: sigma2 IS REMOVED ***
-    if (sample_global_prior != "OLS") {
+    if (sample_global_prior == "hybrid") {
+      for(int j = 0; j < p_mod + regularize_ATE; j++){
+        tau_beta[j] = 10.0;
+      }
+      if(unlink){
+        for(size_t k = 0; k < int_pairs.size(); k++){
+          int full_idx = p_mod + k + regularize_ATE;
+          nu[full_idx] = rinvgamma_amr(1.0, 1.0 + 1.0 / safe_var(tau_beta[full_idx]*tau_beta[full_idx]));
+          tau_beta[full_idx] = std::sqrt(safe_var(rinvgamma_amr(1.0, (1.0 / safe_var(nu[full_idx])) + (beta_int_tilde[k] * beta_int_tilde[k]) / safe_var(2.0 * tau_glob * tau_glob))));
+        }
+      }
+    } else if (sample_global_prior != "OLS") {
       for(int j = 0; j < p_mod + regularize_ATE; j++){
         double current_coeff_tilde;
         if (regularize_ATE) {
@@ -990,27 +1027,35 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_amr(
     
     // 6. Sample global shrinkage parameter tau_glob
     // *** THIS IS THE KEY NCP STEP: sigma2 IS REMOVED ***
-    if (sample_global_prior == "half-cauchy") {
+    if (sample_global_prior == "half-cauchy" || sample_global_prior == "hybrid") {
       xi = rinvgamma_amr(1.0, 1.0 + 1.0 / safe_var(tau_glob*tau_glob));
       double sum_scaled_sq_betas_tilde = 0.0;
-      if(regularize_ATE){
-        sum_scaled_sq_betas_tilde += (alpha_tilde*alpha_tilde) / safe_var(tau_beta[0] * tau_beta[0]);
+      double shape_tau_glob = 1.0 / 2.0;
+      
+      if (sample_global_prior != "hybrid") {
+        if(regularize_ATE){
+          sum_scaled_sq_betas_tilde += (alpha_tilde*alpha_tilde) / safe_var(tau_beta[0] * tau_beta[0]);
+          shape_tau_glob += 0.5;
+        }
+        for(int j = 0; j < p_mod; j++) {
+          sum_scaled_sq_betas_tilde += (beta_tilde[j]*beta_tilde[j]) / safe_var(tau_beta[j + regularize_ATE] * tau_beta[j + regularize_ATE]);
+          shape_tau_glob += 0.5;
+        }
       }
-      for(int j = 0; j < p_mod; j++) {
-        sum_scaled_sq_betas_tilde += (beta_tilde[j]*beta_tilde[j]) / safe_var(tau_beta[j + regularize_ATE] * tau_beta[j + regularize_ATE]);
-      } 
       
       if(unlink){
         for(int k = 0; k < p_int; k++) {
           sum_scaled_sq_betas_tilde += (beta_int_tilde[k] * beta_int_tilde[k]) / safe_var(tau_beta[p_mod + regularize_ATE + k] * tau_beta[p_mod + regularize_ATE + k]);
+          shape_tau_glob += 0.5;
         } 
-      } else {
+      } else if (sample_global_prior != "hybrid") {
         for(size_t k = 0; k < int_pairs.size(); ++k) {
           double var_k = tau_int * tau_beta[regularize_ATE + int_pairs[k].first] * tau_beta[regularize_ATE + int_pairs[k].second];
           sum_scaled_sq_betas_tilde += (beta_int_tilde[k] * beta_int_tilde[k]) / safe_var(var_k);
+          shape_tau_glob += 0.5;
         }
       } 
-      double shape_tau_glob = (static_cast<double>(p_mod + p_int + regularize_ATE) + 1.0) / 2.0;
+      
       double rate_tau_glob = (1.0 / safe_var(xi)) + (1.0 / safe_var(2.0)) * sum_scaled_sq_betas_tilde; // sigma2 removed
       tau_glob = std::sqrt(safe_var(rinvgamma_amr(shape_tau_glob, rate_tau_glob)));
       

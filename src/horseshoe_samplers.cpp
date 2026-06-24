@@ -126,12 +126,14 @@ double logPosteriorTauJ(double tau_j, double beta_j, int index, const std::vecto
 
 [[cpp11::register]]
 writable::list updateLinearTreatmentCpp_cpp(
+    const doubles_matrix<>& X_design,
+    const doubles_matrix<>& XtX_design,
     const doubles_matrix<>& X,
     const doubles_matrix<>& Phi,
     const doubles& Z,
     const doubles& propensity_train,
     writable::doubles residual,
-    const integers& are_continuous,
+    const cpp11::integers& are_continuous,
     double alpha,
     double gamma_prop,
     writable::doubles beta,
@@ -210,26 +212,34 @@ writable::list updateLinearTreatmentCpp_cpp(
   int P_combined = offset_gamma + p_prog; 
   
   if (gibbs) {
+    int P_combined = offset_gamma + p_prog;
+    
     Eigen::Map<Eigen::VectorXd> beta_map((double*)beta.data(), p_mod);
     Eigen::Map<Eigen::VectorXd> beta_int_map((double*)beta_int.data(), p_int);
     Eigen::Map<Eigen::VectorXd> gamma_map((double*)gamma.data(), (p_prog > 0 ? p_prog : 1));
     
-    // Construct Target Y
-    Eigen::VectorXd y_target = residual_map;
-    if(regularize_ATE) y_target.array() += Z_map.array() * alpha;
-    for (int j = 0; j < p_mod; ++j) y_target.array() += Z_map.array() * X_map.col(j).array() * beta_map(j);
-    for (size_t k = 0; k < int_pairs.size(); ++k) y_target.array() += Z_map.array() * X_map.col(int_pairs[k].first).array() * X_map.col(int_pairs[k].second).array() * beta_int_map(k);
+    Eigen::Map<const Eigen::MatrixXd> X_design_map((const double*)X_design.data(), n, P_combined);
+    Eigen::Map<const Eigen::MatrixXd> XtX_design_map((const double*)XtX_design.data(), P_combined, P_combined);
     
+    Eigen::VectorXd combined_current(P_combined);
+    combined_current.setZero();
+    if(regularize_ATE) combined_current(0) = alpha;
+    for(int j=0; j<p_mod; ++j) combined_current(offset_beta + j) = beta_map(j);
+    for(int k=0; k<p_int; ++k) combined_current(offset_beta_int + k) = beta_int_map(k);
     if (use_prognostic_shapley) {
-      for(int l=0; l<p_prog; ++l) y_target.array() += Phi_map.col(l).array() * gamma_map(l);
-    } 
+      for(int l=0; l<p_prog; ++l) combined_current(offset_gamma + l) = gamma_map(l);
+    }
+    
+    // Construct Target Y
+    Eigen::VectorXd y_target = residual_map + X_design_map * combined_current;
     
     // Construct Diagonal Prior Variance D_diag
     Eigen::VectorXd D_diag(P_combined);
     
     // Alpha & Beta priors
     for (int j = 0; j < p_mod + regularize_ATE; ++j) {
-      D_diag(j) = safe_var_linear(tau_beta[j] * tau_beta[j] * tau_glob * tau_glob);
+      double tau_glob_main = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
+      D_diag(j) = safe_var_linear(tau_beta[j] * tau_beta[j] * tau_glob_main * tau_glob_main);
     } 
     // Interaction priors
     for (size_t k = 0; k < int_pairs.size(); ++k) {
@@ -241,47 +251,33 @@ writable::list updateLinearTreatmentCpp_cpp(
     // Gamma priors
     if (use_prognostic_shapley) {
       for(int l=0; l<p_prog; ++l) {
-        D_diag(offset_gamma + l) = safe_var_linear(tau_gamma[l] * tau_gamma[l] * tau_glob * tau_glob);
+        double tau_glob_main = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
+        D_diag(offset_gamma + l) = safe_var_linear(tau_gamma[l] * tau_gamma[l] * tau_glob_main * tau_glob_main);
       }
     }
     
-    // NEW: Algorithm Selection (Bhattacharya for P > N)
     bool use_bhatt_sampler = P_combined >= n;
     Eigen::VectorXd combined_coeffs_new(P_combined);
+    combined_coeffs_new.setZero();
     bool update_success = false;
      
     if (use_bhatt_sampler) {
-      // --- Bhattacharya Sampler (O(N^2 P) instead of O(P^3)) ---
-      
-      // 1. Build X_combined
-      Eigen::MatrixXd X_combined(n, P_combined);
-      if(regularize_ATE) X_combined.col(0) = Z_map;
-      for(int j=0; j<p_mod; ++j) X_combined.col(offset_beta + j) = Z_map.array() * X_map.col(j).array();
-      for(size_t k=0; k<int_pairs.size(); ++k) X_combined.col(offset_beta_int + k) = Z_map.array() * X_map.col(int_pairs[k].first).array() * X_map.col(int_pairs[k].second).array();
-      if(use_prognostic_shapley) {
-        for(int l=0; l<p_prog; ++l) X_combined.col(offset_gamma + l) = Phi_map.col(l);
-      }
-      
+      // --- Bhattacharya Sampler ---
       Eigen::MatrixXd D_scaled = D_diag.asDiagonal();
       D_scaled /= sigma2;
       Eigen::VectorXd D_scaled_sqrt = D_diag.cwiseSqrt() / sigma;
       
-      // 2. Sample u ~ N(0, D/sigma2)
       Eigen::VectorXd u(P_combined);
       for(int j=0; j<P_combined; ++j) u(j) = Rf_rnorm(0.0, D_scaled_sqrt(j));
       
-      // 3. Sample delta ~ N(0, I)
       Eigen::VectorXd delta(n);
       for(int i=0; i<n; ++i) delta(i) = Rf_rnorm(0.0, 1.0);
       
-      // 4. v = X*u + delta
-      Eigen::VectorXd v = X_combined * u + delta;
+      Eigen::VectorXd v = X_design_map * u + delta;
       
-      // 5. M = X D X' + I (NxN matrix)
-      Eigen::MatrixXd M = X_combined * D_scaled * X_combined.transpose();
+      Eigen::MatrixXd M = X_design_map * D_scaled * X_design_map.transpose();
       M.diagonal().array() += 1.0;
       
-      // 6. Robust Solve
       Eigen::LLT<Eigen::MatrixXd> llt(M);
       if(llt.info() != Eigen::Success) {
         M.diagonal().array() += 1e-6; // Jitter
@@ -291,41 +287,17 @@ writable::list updateLinearTreatmentCpp_cpp(
       if(llt.info() == Eigen::Success) {
         Eigen::VectorXd y_scaled = y_target / sigma;
         Eigen::VectorXd w = llt.solve(y_scaled - v);
-        combined_coeffs_new = u + D_scaled * X_combined.transpose() * w;
-        combined_coeffs_new *= sigma; // Scale back
+        combined_coeffs_new = u + D_scaled * X_design_map.transpose() * w;
+        combined_coeffs_new *= sigma;
         update_success = true;
-      } else {
-        cpp11::warning("Bhattacharya sampler failed. Keeping old values.");
       }
-      
     } else {
-      // --- Standard Gibbs (Row-wise updates) ---
-      
-      Eigen::MatrixXd XtX = Eigen::MatrixXd::Zero(P_combined, P_combined);
-      Eigen::VectorXd Xt_y = Eigen::VectorXd::Zero(P_combined);
-      
-      for (int i = 0; i < n; ++i) {
-        Eigen::VectorXd x_row(P_combined);
-        x_row.setZero();
-        if(regularize_ATE) x_row(0) = Z_map(i);
-        for(int j=0; j<p_mod; ++j) x_row(offset_beta + j) = Z_map(i) * X_map(i, j);
-        for(size_t k=0; k<int_pairs.size(); ++k) x_row(offset_beta_int + k) = Z_map(i) * X_map(i, int_pairs[k].first) * X_map(i, int_pairs[k].second);
-        if (use_prognostic_shapley) {
-          for(int l=0; l<p_prog; ++l) x_row(offset_gamma + l) = Phi_map(i, l);
-        }
-        
-        XtX.selfadjointView<Eigen::Lower>().rankUpdate(x_row);
-        Xt_y += x_row * y_target(i);
-      }
-      XtX = XtX.selfadjointView<Eigen::Lower>();
-      
-      // Robust Linear Solve
-      Eigen::MatrixXd Prec = XtX / sigma2;
+      // --- Standard Gibbs ---
       Eigen::VectorXd prior_prec_diag = D_diag.cwiseInverse();
-      // Clamp extreme precisions
       for(int k=0; k<prior_prec_diag.size(); ++k) if(prior_prec_diag(k) > 1e12) prior_prec_diag(k) = 1e12;
       
-      Prec.diagonal() += prior_prec_diag;
+      Eigen::MatrixXd Prec = (XtX_design_map + Eigen::MatrixXd(prior_prec_diag.asDiagonal())) / sigma2;
+      Eigen::VectorXd Xty = X_design_map.transpose() * y_target;
       
       Eigen::LLT<Eigen::MatrixXd> lltOfA(Prec);
       if (lltOfA.info() != Eigen::Success) {
@@ -334,38 +306,42 @@ writable::list updateLinearTreatmentCpp_cpp(
       }
       
       if (lltOfA.info() == Eigen::Success) {
-        Eigen::VectorXd mean = lltOfA.solve(Xt_y / sigma2);
+        Eigen::VectorXd mean = lltOfA.solve(Xty / sigma2);
         Eigen::VectorXd noise(P_combined);
         for(int k=0; k<P_combined; ++k) noise(k) = Rf_rnorm(0.0, 1.0);
         combined_coeffs_new = mean + lltOfA.matrixU().solve(noise);
         update_success = true;
-      } else {
-        cpp11::warning("Cholesky failed. Keeping old values.");
       }
     }
     
-    // Unpack only if successful
     if (update_success) {
       if(regularize_ATE) alpha = combined_coeffs_new(0);
-      for(int j=0; j<p_mod; ++j) beta[j] = combined_coeffs_new(offset_beta + j);
-      for(int k=0; k<p_int; ++k) beta_int[k] = combined_coeffs_new(offset_beta_int + k);
+      for(int j=0; j<p_mod; ++j) beta_map(j) = combined_coeffs_new(offset_beta + j);
+      for(int k=0; k<p_int; ++k) beta_int_map(k) = combined_coeffs_new(offset_beta_int + k);
       if (use_prognostic_shapley) {
-        for(int l=0; l<p_prog; ++l) gamma[l] = combined_coeffs_new(offset_gamma + l);
-      } 
+        for(int l=0; l<p_prog; ++l) gamma_map(l) = combined_coeffs_new(offset_gamma + l);
+      }
+      residual_map = y_target - X_design_map * combined_coeffs_new;
     }
-    
-    // Update Residual
-    Eigen::VectorXd new_fit = Eigen::VectorXd::Zero(n);
-    if(regularize_ATE) new_fit.array() += Z_map.array() * alpha;
-    for (int j=0; j<p_mod; ++j) new_fit.array() += Z_map.array() * X_map.col(j).array() * beta[j];
-    for (size_t k=0; k<int_pairs.size(); ++k) new_fit.array() += Z_map.array() * X_map.col(int_pairs[k].first).array() * X_map.col(int_pairs[k].second).array() * beta_int[k];
-    if (use_prognostic_shapley) {                                            
-      for (int l=0; l<p_prog; ++l) new_fit.array() += Phi_map.col(l).array() * gamma[l];
-    }
-    residual_map = y_target - new_fit;
     
     // Shrinkage Updates
-    if (sample_global_prior != "OLS") {
+    if (sample_global_prior == "hybrid") {
+      for(int j = 0; j < p_mod + regularize_ATE; j++){
+        tau_beta[j] = 10.0;
+      }
+      if(unlink){
+        for(size_t k=0; k<int_pairs.size(); k++) {
+          int idx = offset_beta_int + k;
+          nu[idx] = rinvgamma_linear(1.0, 1.0 + 1.0/safe_var_linear(tau_beta[idx]*tau_beta[idx]));
+          tau_beta[idx] = std::sqrt(safe_var_linear(rinvgamma_linear(1.0, (1.0/safe_var_linear(nu[idx])) + (beta_int[k]*beta_int[k])/safe_var_linear(2.0*tau_glob*tau_glob*sigma2))));
+        }
+      }
+      if (use_prognostic_shapley) {
+        for(int l = 0; l < p_prog; l++){
+          tau_gamma[l] = 10.0;
+        }
+      }
+    } else if (sample_global_prior != "OLS") {
       for(int j = 0; j < p_mod + regularize_ATE; j++){
         double current_coeff = regularize_ATE ? ((j==0) ? alpha : beta[j-1]) : beta[j];
         nu[j] = rinvgamma_linear(1.0, 1.0 + 1.0 / safe_var_linear(tau_beta[j]*tau_beta[j]));
@@ -393,24 +369,40 @@ writable::list updateLinearTreatmentCpp_cpp(
     }
     
     // Global Tau
-    if (sample_global_prior == "half-cauchy") {
+    if (sample_global_prior == "half-cauchy" || sample_global_prior == "hybrid") {
       xi = rinvgamma_linear(1.0, 1.0 + 1.0 / safe_var_linear(tau_glob*tau_glob));
       double sum_scaled = 0.0;
-      if(regularize_ATE) sum_scaled += (alpha*alpha) / safe_var_linear(tau_beta[0]*tau_beta[0]);
-      for(int j=0; j<p_mod; j++) sum_scaled += (beta[j]*beta[j]) / safe_var_linear(tau_beta[j+offset_beta]*tau_beta[j+offset_beta]);
+      double shape_glob = 1.0 / 2.0;
+      
+      if (sample_global_prior != "hybrid") {
+        if(regularize_ATE){
+          sum_scaled += (alpha*alpha) / safe_var_linear(tau_beta[0]*tau_beta[0]);
+          shape_glob += 0.5;
+        }
+        for(int j=0; j<p_mod; j++) {
+          sum_scaled += (beta[j]*beta[j]) / safe_var_linear(tau_beta[j+offset_beta]*tau_beta[j+offset_beta]);
+          shape_glob += 0.5;
+        }
+      }
       
       if(unlink) {
-        for(size_t k=0; k<int_pairs.size(); k++) sum_scaled += (beta_int[k]*beta_int[k]) / safe_var_linear(tau_beta[offset_beta_int+k]*tau_beta[offset_beta_int+k]);
-      } else {
+        for(size_t k=0; k<int_pairs.size(); k++) {
+          sum_scaled += (beta_int[k]*beta_int[k]) / safe_var_linear(tau_beta[offset_beta_int+k]*tau_beta[offset_beta_int+k]);
+          shape_glob += 0.5;
+        }
+      } else if (sample_global_prior != "hybrid") {
         for(size_t k=0; k<int_pairs.size(); k++) {
           double var_k = tau_int * tau_beta[offset_beta + int_pairs[k].first] * tau_beta[offset_beta + int_pairs[k].second];
           sum_scaled += (beta_int[k]*beta_int[k]) / safe_var_linear(var_k);
+          shape_glob += 0.5;
         }
       } 
       if (use_prognostic_shapley) {
-        for(int l=0; l<p_prog; l++) sum_scaled += (gamma[l]*gamma[l]) / safe_var_linear(tau_gamma[l]*tau_gamma[l]);
+        for(int l=0; l<p_prog; l++) {
+          sum_scaled += (gamma[l]*gamma[l]) / safe_var_linear(tau_gamma[l]*tau_gamma[l]);
+          shape_glob += 0.5;
+        }
       }
-      double shape_glob = (static_cast<double>(P_combined) + 1.0) / 2.0;
       double rate_glob = (1.0 / safe_var_linear(xi)) + (1.0 / safe_var_linear(2.0 * sigma2)) * sum_scaled;
       if(rate_glob < 1e-12) rate_glob = 1e-12;
       tau_glob = std::sqrt(safe_var_linear(rinvgamma_linear(shape_glob, rate_glob)));
@@ -463,12 +455,14 @@ writable::list updateLinearTreatmentCpp_cpp(
 
 [[cpp11::register]]
 writable::doubles updateLinearTreatmentCpp_NCP_cpp(
+    const doubles_matrix<>& X_design,
+    const doubles_matrix<>& XtX_design,
     const doubles_matrix<>& X,
     const doubles_matrix<>& Phi,
     const doubles& Z,
     const doubles& propensity_train,
     writable::doubles residual,
-    const integers& are_continuous,
+    const cpp11::integers& are_continuous,
     double alpha_tilde,
     double gamma_prop, 
     writable::doubles beta_tilde,
@@ -536,15 +530,16 @@ writable::doubles updateLinearTreatmentCpp_NCP_cpp(
   int offset_beta_int = offset_beta + p_mod;
   int offset_gamma = offset_beta_int + p_int;
   
-  if(regularize_ATE) alpha_current = alpha_tilde * tau_beta[0] * tau_glob;
-  for (int j = 0; j < p_mod; ++j) beta_current(j) = beta_tilde_map(j) * tau_beta[j + offset_beta] * tau_glob;
+  double tau_glob_main_pred = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
+  if(regularize_ATE) alpha_current = alpha_tilde * tau_beta[0] * tau_glob_main_pred;
+  for (int j = 0; j < p_mod; ++j) beta_current(j) = beta_tilde_map(j) * tau_beta[j + offset_beta] * tau_glob_main_pred;
   for (size_t k = 0; k < int_pairs.size(); ++k) {
     double V_k = unlink ? tau_beta[offset_beta_int + k] : (std::sqrt(tau_int) * tau_beta[offset_beta + int_pairs[k].first] * tau_beta[offset_beta + int_pairs[k].second]);
     beta_int_current(k) = beta_int_tilde_map(k) * V_k * tau_glob;
   }
   
   if (use_prognostic_shapley) {
-    for(int l = 0; l < p_prog; ++l) gamma_current(l) = gamma_tilde_map(l) * tau_gamma[l] * tau_glob;
+    for(int l = 0; l < p_prog; ++l) gamma_current(l) = gamma_tilde_map(l) * tau_gamma[l] * tau_glob_main_pred;
   }
   
   // --- Propensity ---
@@ -617,14 +612,15 @@ writable::doubles updateLinearTreatmentCpp_NCP_cpp(
     }
     
     // Update Real
-    if(regularize_ATE) alpha_current = alpha_tilde * tau_beta[0] * tau_glob;
-    for (int j = 0; j < p_mod; ++j) beta_current(j) = beta_tilde_map(j) * tau_beta[j + offset_beta] * tau_glob;
+    double tau_glob_main = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
+    if(regularize_ATE) alpha_current = alpha_tilde * tau_beta[0] * tau_glob_main;
+    for (int j = 0; j < p_mod; ++j) beta_current(j) = beta_tilde_map(j) * tau_beta[j + offset_beta] * tau_glob_main;
     for (size_t k = 0; k < int_pairs.size(); ++k) {
       double V_k = unlink ? tau_beta[offset_beta_int + k] : (std::sqrt(tau_int) * tau_beta[offset_beta + int_pairs[k].first] * tau_beta[offset_beta + int_pairs[k].second]);
       beta_int_current(k) = beta_int_tilde_map(k) * V_k * tau_glob;
     }
     if (use_prognostic_shapley) {
-      for (int l = 0; l < p_prog; ++l) gamma_current(l) = gamma_tilde_map(l) * tau_gamma[l] * tau_glob;
+      for (int l = 0; l < p_prog; ++l) gamma_current(l) = gamma_tilde_map(l) * tau_gamma[l] * tau_glob_main;
     }
     
     // Residual Update
@@ -638,7 +634,24 @@ writable::doubles updateLinearTreatmentCpp_NCP_cpp(
     residual_map = y_target - new_fit;
     
     // Shrinkage
-    if (sample_global_prior != "OLS") {
+    if (sample_global_prior == "hybrid") {
+      for(int j=0; j<p_mod+regularize_ATE; ++j) {
+        tau_beta[j] = 10.0;
+      }
+      if(unlink){
+        for(size_t k=0; k<int_pairs.size(); k++){
+          int full_idx = offset_beta_int + k;
+          nu[full_idx] = rinvgamma_linear(1.0, 1.0 + 1.0 / safe_var_linear(tau_beta[full_idx]*tau_beta[full_idx]));
+          tau_beta[full_idx] = std::sqrt(safe_var_linear(rinvgamma_linear(1.0, (1.0 / safe_var_linear(nu[full_idx])) + (beta_int_tilde[k] * beta_int_tilde[k]) / safe_var_linear(2.0 * tau_glob * tau_glob))));
+        }
+      }
+      if (use_prognostic_shapley) {
+        for(int l=0; l<p_prog; ++l) {
+          nu_gamma[l] = rinvgamma_linear(1.0, 1.0 + 1.0/safe_var_linear(tau_gamma[l]*tau_gamma[l]));
+          tau_gamma[l] = std::sqrt(safe_var_linear(rinvgamma_linear(1.0, (1.0/safe_var_linear(nu_gamma[l])) + (gamma_tilde[l]*gamma_tilde[l])/safe_var_linear(2.0*tau_glob*tau_glob))));
+        }
+      }
+    } else if (sample_global_prior != "OLS") {
       for(int j=0; j<p_mod+regularize_ATE; ++j) {
         double coef = regularize_ATE ? ((j==0)?alpha_tilde:beta_tilde[j-1]) : beta_tilde[j];
         nu[j] = rinvgamma_linear(1.0, 1.0 + 1.0/safe_var_linear(tau_beta[j]*tau_beta[j]));
@@ -665,29 +678,42 @@ writable::doubles updateLinearTreatmentCpp_NCP_cpp(
       tau_glob = 1.0;
     }
     
-    if (sample_global_prior == "half-cauchy") {
+    if (sample_global_prior == "half-cauchy" || sample_global_prior == "hybrid") {
       xi = rinvgamma_linear(1.0, 1.0 + 1.0 / safe_var_linear(tau_glob*tau_glob));
       double sum_scaled = 0.0;
+      double shape = 1.0 / 2.0;
       
-      if(regularize_ATE) sum_scaled += (alpha_tilde*alpha_tilde) / safe_var_linear(tau_beta[0]*tau_beta[0]);
-      for(int j=0; j<p_mod; ++j) sum_scaled += (beta_tilde[j]*beta_tilde[j]) / safe_var_linear(tau_beta[j+offset_beta]*tau_beta[j+offset_beta]);
+      if (sample_global_prior != "hybrid") {
+        if(regularize_ATE){
+          sum_scaled += (alpha_tilde*alpha_tilde) / safe_var_linear(tau_beta[0]*tau_beta[0]);
+          shape += 0.5;
+        }
+        for(int j=0; j<p_mod; ++j) {
+          sum_scaled += (beta_tilde[j]*beta_tilde[j]) / safe_var_linear(tau_beta[j+offset_beta]*tau_beta[j+offset_beta]);
+          shape += 0.5;
+        }
+      }
       
       if(unlink){
         for(int k = 0; k < p_int; k++) {
           sum_scaled += (beta_int_tilde[k] * beta_int_tilde[k]) / safe_var_linear(tau_beta[offset_beta_int + k] * tau_beta[offset_beta_int + k]);
+          shape += 0.5;
         } 
-      } else {
+      } else if (sample_global_prior != "hybrid") {
         for(size_t k = 0; k < int_pairs.size(); ++k) {
           double var_k = tau_int * tau_beta[offset_beta + int_pairs[k].first] * tau_beta[offset_beta + int_pairs[k].second];
           sum_scaled += (beta_int_tilde[k] * beta_int_tilde[k]) / safe_var_linear(var_k);
+          shape += 0.5;
         }
       } 
       
       if (use_prognostic_shapley) {
-        for(int l=0; l<p_prog; ++l) sum_scaled += (gamma_tilde[l]*gamma_tilde[l]) / safe_var_linear(tau_gamma[l]*tau_gamma[l]);
+        for(int l=0; l<p_prog; ++l) {
+          sum_scaled += (gamma_tilde[l]*gamma_tilde[l]) / safe_var_linear(tau_gamma[l]*tau_gamma[l]);
+          shape += 0.5;
+        }
       }
       
-      double shape = (static_cast<double>(P_combined) + 1.0) / 2.0;
       double rate = (1.0/safe_var_linear(xi)) + (1.0/2.0) * sum_scaled;
       tau_glob = std::sqrt(safe_var_linear(rinvgamma_linear(shape, rate)));
     }

@@ -171,10 +171,12 @@ double logPosteriorTauGlob_old(double tau_glob,
   double log2pi = std::log(2.0 * M_PI);
   double logLik = 0.0;
   
-  for (size_t s = 0; s < betas.size(); s++) {
-    double var_main = safe_var(sigma2 * (tau[s] * tau[s]) * (tau_glob * tau_glob));
-    logLik += -0.5 * (log2pi + safe_log(var_main)) - 0.5 * (betas[s] * betas[s] / var_main);
-  }  
+  if (prior_type != "hybrid") {
+    for (size_t s = 0; s < betas.size(); s++) {
+      double var_main = safe_var(sigma2 * (tau[s] * tau[s]) * (tau_glob * tau_glob));
+      logLik += -0.5 * (log2pi + safe_log(var_main)) - 0.5 * (betas[s] * betas[s] / var_main);
+    }  
+  }
   
   for (size_t m = 0; m < int_pairs.size(); m++) {
     double var_jk = unlink ?
@@ -356,8 +358,8 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
       }
       
       double sigma2 = sigma * sigma;
-      Eigen::MatrixXd D_scaled_mat = D_mat / sigma2; // Create the scaled prior covariance
-      Eigen::VectorXd D_scaled_diag = D_diag / sigma2;
+      Eigen::MatrixXd D_scaled_mat = D_mat; // Create the scaled prior covariance
+      Eigen::VectorXd D_scaled_diag = D_diag;
       
       Eigen::VectorXd u(P_combined);
       for (int j = 0; j < P_combined; ++j) u(j) = Rf_rnorm(0.0, std::sqrt(D_scaled_diag(j)));
@@ -417,8 +419,7 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
       Eigen::VectorXd D_inv_diag = D_diag.cwiseInverse();
       
       
-      Eigen::MatrixXd Prec = XtX / sigma2; //[Sigma Scaling is important]
-      Prec.diagonal() += D_inv_diag;
+      Eigen::MatrixXd Prec = (XtX + Eigen::MatrixXd(D_inv_diag.asDiagonal())) / sigma2; //[Sigma Scaling is important]
       
       Eigen::LLT<Eigen::MatrixXd> lltOfA(Prec);
       
@@ -646,7 +647,10 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
       }
       
       bool current_unlink = regularize_ATE ? true : unlink;
-      if (sample_global_prior != "OLS") {
+      if (sample_global_prior == "hybrid") {
+        tau_beta[j] = 1.0;
+        tau_beta_std[j] = 1.0;
+      } else if (sample_global_prior != "OLS") {
         double tb_j_new = sample_tau_j_slice_old(tau_beta[j], current_coeff, j, beta_int_std, tau_beta_std, int_pairs, 1.0, sigma, tau_glob, current_unlink, step_out, max_steps);
         tau_beta[j] = tb_j_new;
         tau_beta_std[j] = tb_j_new;
