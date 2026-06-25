@@ -235,7 +235,6 @@ cpp11::writable::list updateLinearTreatmentCpp_amr(
     cpp11::writable::doubles residual,
     const cpp11::r_vector<int>& are_continuous,
     double alpha,
-    double gamma, // propensity coefficient.
     cpp11::writable::doubles beta,
     cpp11::writable::doubles beta_int,
     cpp11::writable::doubles tau_beta,
@@ -280,14 +279,7 @@ cpp11::writable::list updateLinearTreatmentCpp_amr(
   Eigen::Map<const Eigen::VectorXd> Z_map(REAL(Z), n);
   Eigen::Map<const Eigen::MatrixXd> X_map(REAL(X), n, p_mod);
   
-  // --- GAMMA & ALPHA UPDATES (VECTORIZED) ---
-  
-  if (propensity_seperate == "mu") {
-    Eigen::Map<const Eigen::VectorXd> propensity_map(REAL(propensity_train), n);
-    residual_map += propensity_map * gamma;
-    gamma = sample_alpha_cpp(residual, propensity_train, obs_weights, sigma, 10);
-    residual_map -= propensity_map * gamma;
-  }
+  // --- ALPHA UPDATES (VECTORIZED) ---
   if (!regularize_ATE){
     residual_map += Z_map * alpha;
     alpha = sample_alpha_cpp(residual, Z, obs_weights, sigma, alpha_prior_sd);
@@ -671,7 +663,6 @@ cpp11::writable::list updateLinearTreatmentCpp_amr(
   params_out.push_back(alpha);
   params_out.push_back(tau_int);
   params_out.push_back(tau_glob);
-  params_out.push_back(gamma);
   params_out.push_back(xi);
   for (double val : beta) params_out.push_back(val);
   for (double val : beta_int) params_out.push_back(val);
@@ -710,8 +701,7 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_amr(
     cpp11::writable::doubles residual,
     const cpp11::doubles& obs_weights,
     const cpp11::r_vector<int>& are_continuous,
-    double alpha_tilde, // NOTE: Pass alpha_tilde
-    double gamma, 
+    double alpha_tilde,
     cpp11::writable::doubles beta_tilde,     // NOTE: Pass beta_tilde
     cpp11::writable::doubles beta_int_tilde, // NOTE: Pass beta_int_tilde
     cpp11::writable::doubles tau_beta,
@@ -778,14 +768,7 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_amr(
     beta_int_current(k) = beta_int_tilde_map(k) * V_k_star_tau_only * tau_glob * sigma;
   }
   
-  // --- GAMMA & ALPHA UPDATES (VECTORIZED) ---
-  
-  if (propensity_seperate == "mu") {
-    Eigen::Map<const Eigen::VectorXd> propensity_map(REAL(propensity_train), n);
-    residual_map += propensity_map * gamma;
-    gamma = sample_alpha_cpp(residual, propensity_train, obs_weights, sigma, 10);
-    residual_map -= propensity_map * gamma;
-  }
+  // --- ALPHA UPDATES (VECTORIZED) ---
   if (!regularize_ATE){
     // If not regularizing ATE, we sample alpha_tilde as the *real* alpha
     // but its name in the R loop is 'alpha_tilde' for consistency
@@ -1064,7 +1047,6 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_amr(
   params_out.push_back(alpha_tilde);
   params_out.push_back(tau_int);
   params_out.push_back(tau_glob);
-  params_out.push_back(gamma);
   params_out.push_back(xi);
   for (double val : beta_tilde) params_out.push_back(val);   // Return beta_tilde
   for (double val : beta_int_tilde) params_out.push_back(val); // Return beta_int_tilde
@@ -1091,9 +1073,20 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_amr(
     outfile.close();
   }
   
+  cpp11::writable::doubles real_params_out;
+  real_params_out.reserve(4 + p_mod + p_int);
+  double alpha_real_out = regularize_ATE ? alpha_current : alpha_tilde;
+  real_params_out.push_back(alpha_real_out);
+  real_params_out.push_back(tau_int);
+  real_params_out.push_back(tau_glob);
+  real_params_out.push_back(xi);
+  for (int j = 0; j < p_mod; ++j) real_params_out.push_back(beta_current[j]);
+  for (int k = 0; k < p_int; ++k) real_params_out.push_back(beta_int_current[k]);
+
   // Return list with params and residuals separate
   return cpp11::writable::list({
     "params"_nm = params_out,
-      "residuals"_nm = residuals_out
+    "real_params"_nm = real_params_out,
+    "residuals"_nm = residuals_out
   });
 }

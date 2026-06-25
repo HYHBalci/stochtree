@@ -244,7 +244,6 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
     cpp11::writable::doubles residual,
     const cpp11::r_vector<int>& are_continuous,
     double alpha,
-    double gamma, // propensity coefficient.
     cpp11::writable::doubles beta,
     cpp11::writable::doubles beta_int,
     cpp11::writable::doubles tau_beta,
@@ -289,14 +288,7 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
   Eigen::Map<const Eigen::VectorXd> Z_map(REAL(Z), n);
   Eigen::Map<const Eigen::MatrixXd> X_map(REAL(X), n, p_mod);
   
-  // --- GAMMA & ALPHA UPDATES (VECTORIZED) ---
-  
-  if (propensity_seperate == "mu") {
-    Eigen::Map<const Eigen::VectorXd> propensity_map(REAL(propensity_train), n);
-    residual_map += propensity_map * gamma;
-    gamma = sample_alpha_cpp(residual, propensity_train, sigma, 10);
-    residual_map -= propensity_map * gamma;
-  }
+  // --- ALPHA UPDATES (VECTORIZED) ---
   if (!regularize_ATE){
     residual_map += Z_map * alpha;
     alpha = sample_alpha_cpp(residual, Z, sigma, alpha_prior_sd);
@@ -676,7 +668,6 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
   params_out.push_back(alpha);
   params_out.push_back(tau_int);
   params_out.push_back(tau_glob);
-  params_out.push_back(gamma);
   params_out.push_back(xi);
   for (double val : beta) params_out.push_back(val);
   for (double val : beta_int) params_out.push_back(val);
@@ -715,7 +706,6 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_cpp_old(
     cpp11::writable::doubles residual,
     const cpp11::r_vector<int>& are_continuous,
     double alpha_tilde, // NOTE: Pass alpha_tilde
-    double gamma, 
     cpp11::writable::doubles beta_tilde,     // NOTE: Pass beta_tilde
     cpp11::writable::doubles beta_int_tilde, // NOTE: Pass beta_int_tilde
     cpp11::writable::doubles tau_beta,
@@ -782,14 +772,7 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_cpp_old(
     beta_int_current(k) = beta_int_tilde_map(k) * V_k_star_tau_only * tau_glob * sigma;
   }
   
-  // --- GAMMA & ALPHA UPDATES (VECTORIZED) ---
-  
-  if (propensity_seperate == "mu") {
-    Eigen::Map<const Eigen::VectorXd> propensity_map(REAL(propensity_train), n);
-    residual_map += propensity_map * gamma;
-    gamma = sample_alpha_cpp(residual, propensity_train, sigma, 10);
-    residual_map -= propensity_map * gamma;
-  }
+  // --- ALPHA UPDATES (VECTORIZED) ---
   if (!regularize_ATE){
     // If not regularizing ATE, we sample alpha_tilde as the *real* alpha
     // but its name in the R loop is 'alpha_tilde' for consistency
@@ -1065,7 +1048,6 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_cpp_old(
   params_out.push_back(alpha_tilde);
   params_out.push_back(tau_int);
   params_out.push_back(tau_glob);
-  params_out.push_back(gamma);
   params_out.push_back(xi);
   for (double val : beta_tilde) params_out.push_back(val);   // Return beta_tilde
   for (double val : beta_int_tilde) params_out.push_back(val); // Return beta_int_tilde

@@ -103,6 +103,9 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
   sample_global_prior <- general_params_updated$sample_global_prior
   unlink <- general_params_updated$unlink 
   gibbs <- general_params_updated$gibbs
+  if (use_ncp) {
+    gibbs <- TRUE
+  }
   simple_prior <- general_params_updated$simple_prior
   save_output <- general_params_updated$save_output
   interaction_rule <- general_params_updated$interaction_rule
@@ -158,7 +161,6 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
   p_mod <- ncol(X_train)
   n <- nrow(X_train)
   alpha <- 0 
-  gamma <- 0 
   
   if(propensity_seperate == "tau"){
     p_mod <- p_mod + 1
@@ -203,7 +205,6 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
   alpha_samples <- matrix(0, nrow = num_chains, ncol = num_mcmc)
   all_partial_residuals <- array(0, dim = c(n, num_mcmc, num_chains))
   
-  gamma_samples <- matrix(0, nrow = num_chains, ncol = num_mcmc)
   if(save_output){
     xi_samples <- matrix(0, nrow = num_chains, ncol = num_mcmc)
   }
@@ -1040,6 +1041,10 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
   X_design <- design_mats$X_design
   XtX_design <- design_mats$XtX_design
 
+  alpha_real <- alpha
+  beta_real <- beta
+  beta_int_real <- beta_int
+
   # Run GFR (warm start) if specified
   if (num_gfr > 0){
     for (i in 1:num_gfr) {
@@ -1064,8 +1069,9 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
       if (probit_outcome_model) {
         # Sample latent probit variable, z | -
         mu_forest_pred <- active_forest_mu$predict(forest_dataset_train)
-        tau_forest_pred <- as.vector(as.matrix(full_design_matrix_train) %*% c(alpha, beta, beta_int))
-        forest_pred <- mu_forest_pred + Z_linear*tau_forest_pred
+        tau_forest_pred <- as.vector(as.matrix(full_design_matrix_train) %*% c(alpha_real, beta_real, beta_int_real))
+        forest_pred <- mu_forest_pred + Z_linear*tau_forest_pred
+
         mu0 <- forest_pred[y_train == 0]
         mu1 <- forest_pred[y_train == 1]
         u0 <- runif(sum(y_train == 0), 0, pnorm(0 - mu0))
@@ -1081,8 +1087,9 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
       # Sample robust observation weights if requested
       if (robust && !probit_outcome_model) {
         mu_forest_pred <- active_forest_mu$predict(forest_dataset_train)
-        tau_forest_pred <- as.vector(as.matrix(full_design_matrix_train) %*% c(alpha, beta, beta_int))
-        forest_pred <- mu_forest_pred + Z_linear * tau_forest_pred
+        tau_forest_pred <- as.vector(as.matrix(full_design_matrix_train) %*% c(alpha_real, beta_real, beta_int_real))
+        forest_pred <- mu_forest_pred + Z_linear * tau_forest_pred
+
         if (has_rfx) {
           forest_pred <- forest_pred + rfx_model$predict(rfx_dataset_train, rfx_tracker_train)
         }
@@ -1150,7 +1157,6 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           residual = tau_residual,
           are_continuous = as.vector(as.integer(boolean_continuous*1)),
           alpha_tilde = alpha, 
-          gamma = gamma,
           beta_tilde = beta,
           beta_int_tilde = beta_int,
           tau_beta = tau_beta,
@@ -1178,7 +1184,6 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           residual = tau_residual,
           are_continuous = as.vector(as.integer(boolean_continuous*1)),
           alpha_tilde = alpha, 
-          gamma = gamma,
           beta_tilde = beta,
           beta_int_tilde = beta_int,
           tau_beta = tau_beta,
@@ -1208,7 +1213,6 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           residual = tau_residual,
           are_continuous = as.vector(as.integer(boolean_continuous*1)),
           alpha = alpha,
-          gamma = gamma,
           beta = beta,
           beta_int = beta_int,
           tau_beta = tau_beta,
@@ -1236,7 +1240,6 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           residual = tau_residual,
           are_continuous = as.vector(as.integer(boolean_continuous*1)),
           alpha = alpha,
-          gamma = gamma,
           beta = beta,
           beta_int = beta_int,
           tau_beta = tau_beta,
@@ -1259,24 +1262,16 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
         )
       }
       
-      # Unpack list result
+            # Unpack list result
       params_vec <- update_results$params
       residual <- update_results$residuals
       
       # Extract scalars from params_vec (Fixed order from C++)
-      # 1: alpha, 2: tau_int, 3: tau_glob, 4: gamma, 5: xi
+      # 1: alpha, 2: tau_int, 3: tau_glob, 4: unused, 5: xi
       alpha <- params_vec[1]
       tau_int <- params_vec[2]
       tau_glob <- params_vec[3]
-      gamma <- params_vec[4]
       xi <- params_vec[5]
-      
-      # Calculate vector ranges
-      # P_mod is size of beta
-      # P_int is size of beta_int
-      
-      # Regularize_ATE effects tau_beta/nu size but NOT beta size directly in extraction here, 
-      # but beta start index is fixed at 6.
       
       beta_start <- 6
       beta_end <- beta_start + p_mod - 1
@@ -1289,10 +1284,6 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
       } else {
         beta_int <- numeric(0)
       }
-      
-      # Tau_beta and Nu sizes depend on unlink and regularize_ATE
-      # If unlink: p_mod + p_int + regularize_ATE
-      # Else: p_mod + regularize_ATE
       
       tau_beta_start <- if(p_int > 0) beta_int_end + 1 else beta_end + 1
       
@@ -1308,6 +1299,21 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
       nu_end <- nu_start + tau_len - 1
       nu <- params_vec[nu_start:nu_end]
       
+      if (use_ncp) {
+        real_params_vec <- update_results$real_params
+        alpha_real <- real_params_vec[1]
+        beta_real <- real_params_vec[6:(5 + p_mod)]
+        if(p_int > 0) {
+          beta_int_real <- real_params_vec[(6 + p_mod):(5 + p_mod + p_int)]
+        } else {
+          beta_int_real <- numeric(0)
+        }
+      } else {
+        alpha_real <- alpha
+        beta_real <- beta
+        beta_int_real <- beta_int
+      }
+      
       # Update outcome with new residual
       outcome_train$update_data(residual)
       
@@ -1315,7 +1321,7 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
       if (adaptive_coding) {
         # Estimate mu(X) and tau(X) and compute y - mu(X)
         mu_x_raw_train <- active_forest_mu$predict_raw(forest_dataset_train)
-        tau_x_raw_train <- as.vector(as.matrix(full_design_matrix_train) %*% c(alpha, beta, beta_int))
+        tau_x_raw_train <- as.vector(as.matrix(full_design_matrix_train) %*% c(alpha_real, beta_real, beta_int_real))
         partial_resid_mu_train <- resid_train - mu_x_raw_train
         if (has_rfx) {
           rfx_preds_train <- rfx_model$predict(rfx_dataset_train, rfx_tracker_train)
@@ -1548,9 +1554,10 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           # Sample latent probit variable, z | -
           mu_forest_pred <- active_forest_mu$predict(forest_dataset_train)
           # come here
-          tau_forest_pred <- as.vector(as.matrix(full_design_matrix_train)  %*% c(alpha, beta, beta_int))
+          tau_forest_pred <- as.vector(as.matrix(full_design_matrix_train)  %*% c(alpha_real, beta_real, beta_int_real))
           
-          forest_pred <- mu_forest_pred + Z_linear*tau_forest_pred
+          forest_pred <- mu_forest_pred + Z_linear*tau_forest_pred
+
           mu0 <- forest_pred[y_train == 0]
           mu1 <- forest_pred[y_train == 1]
           u0 <- runif(sum(y_train == 0), 0, pnorm(0 - mu0))
@@ -1566,8 +1573,9 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
         # Sample robust observation weights if requested
         if (robust && !probit_outcome_model) {
           mu_forest_pred <- active_forest_mu$predict(forest_dataset_train)
-          tau_forest_pred <- as.vector(as.matrix(full_design_matrix_train) %*% c(alpha, beta, beta_int))
-          forest_pred <- mu_forest_pred + Z_linear * tau_forest_pred
+          tau_forest_pred <- as.vector(as.matrix(full_design_matrix_train) %*% c(alpha_real, beta_real, beta_int_real))
+          forest_pred <- mu_forest_pred + Z_linear * tau_forest_pred
+
           if (has_rfx) {
             forest_pred <- forest_pred + rfx_model$predict(rfx_dataset_train, rfx_tracker_train)
           }
@@ -1634,7 +1642,6 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           obs_weights = obs_weights,
           are_continuous = as.vector(as.integer(boolean_continuous*1)),
           alpha_tilde = alpha, 
-          gamma = gamma,
           beta_tilde = beta,
           beta_int_tilde = beta_int,
           tau_beta = tau_beta,
@@ -1662,7 +1669,6 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
               residual = tau_residual,
               are_continuous = as.vector(as.integer(boolean_continuous*1)),
               alpha_tilde = alpha, 
-              gamma = gamma,
               beta_tilde = beta,
               beta_int_tilde = beta_int,
               tau_beta = tau_beta,
@@ -1693,7 +1699,6 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           residual = tau_residual,
           are_continuous = as.vector(as.integer(boolean_continuous*1)),
           alpha = alpha,
-          gamma = gamma,
           beta = beta,
           beta_int = beta_int,
           tau_beta = tau_beta,
@@ -1721,7 +1726,6 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
               residual = tau_residual,
               are_continuous = as.vector(as.integer(boolean_continuous*1)),
               alpha = alpha,
-              gamma = gamma,
               beta = beta,
               beta_int = beta_int,
               tau_beta = tau_beta,
@@ -1748,11 +1752,10 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           params_vec <- update_results$params
           residual <- update_results$residuals
           
-          # 1: alpha, 2: tau_int, 3: tau_glob, 4: gamma, 5: xi
+          # 1: alpha, 2: tau_int, 3: tau_glob, 4: unused, 5: xi
           alpha <- params_vec[1]
           tau_int <- params_vec[2]
           tau_glob <- params_vec[3]
-          gamma <- params_vec[4]
           xi <- params_vec[5]
           
           beta_start <- 6
@@ -1786,51 +1789,15 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
         # After loop, update object residual
         outcome_train$update_data(residual)
         
-        if(use_ncp) {
-          ate_offset <- as.integer(regularize_ATE)
-          tau_beta_main_indices <- (1 + ate_offset):(p_mod + ate_offset)
-          
-          if(regularize_ATE) {
-            if (sample_global_prior == "hybrid") {
-              alpha_real <- alpha * tau_beta[1]
-            } else {
-              alpha_real <- alpha * tau_beta[1] * tau_glob
-            }
-          } else {
-            alpha_real <- alpha
-          }
-          
-          if (sample_global_prior == "hybrid") {
-            beta_real <- beta * tau_beta[tau_beta_main_indices]
-          } else {
-            beta_real <- beta * tau_beta[tau_beta_main_indices] * tau_glob
-          }
-          
+        if (use_ncp) {
+          real_params_vec <- update_results$real_params
+          alpha_real <- real_params_vec[1]
+          beta_real <- real_params_vec[6:(5 + p_mod)]
           if(p_int > 0) {
-            if(unlink) {
-              tau_beta_int_indices <- (p_mod + ate_offset + 1):length(tau_beta)
-              beta_int_real <- beta_int * tau_beta[tau_beta_int_indices] * tau_glob
-            } else {
-              int_pairs_matrix <- interaction_pairs(p_mod, boolean_continuous)
-              
-              beta_int_real <- numeric(p_int)
-              for (k in 1:p_int) {
-                # Pak de 1-gebaseerde indexen (i, j) van de hoofdeffecten
-                idx_i <- int_pairs_matrix[1, k]
-                idx_j <- int_pairs_matrix[2, k]
-                
-                # Vind de bijbehorende tau_beta waarden (met offset)
-                tau_i <- tau_beta[idx_i + ate_offset]
-                tau_j <- tau_beta[idx_j + ate_offset]
-                
-                # Pas de NCP-formule toe
-                beta_int_real[k] <- beta_int[k] * tau_glob * (sqrt(tau_int) * tau_i * tau_j)
-              }
-            }                       
+            beta_int_real <- real_params_vec[(6 + p_mod):(5 + p_mod + p_int)]
           } else {
             beta_int_real <- numeric(0)
           }
-          
         } else {
           alpha_real <- alpha
           beta_real <- beta
@@ -1846,7 +1813,6 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
             beta_int_samples[chain_num, linear_counter, ] <- beta_int_real
           }
           
-          gamma_samples[chain_num, linear_counter] <- gamma
           tau_beta_samples[chain_num, linear_counter, ] <- tau_beta
           tau_int_samples[chain_num, linear_counter] <- tau_int
           tau_glob_samples[chain_num, linear_counter] <- tau_glob
@@ -1862,7 +1828,7 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           # Estimate mu(X) and tau(X) and compute y - mu(X)
           mu_x_raw_train <- active_forest_mu$predict_raw(forest_dataset_train)
           X_for_prediction <- if(propensity_seperate == "tau") X_train else X_train_raw
-          tau_x_raw_train <- as.vector(as.matrix(full_design_matrix_train) %*% c(alpha, beta, beta_int))
+          tau_x_raw_train <- as.vector(as.matrix(full_design_matrix_train) %*% c(alpha_real, beta_real, beta_int_real))
           partial_resid_mu_train <- resid_train - mu_x_raw_train
           if (has_rfx) {
             rfx_preds_train <- rfx_model$predict(rfx_dataset_train, rfx_tracker_train)
@@ -1950,13 +1916,14 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
   # Forest predictions
   mu_hat_train <- forest_samples_mu$predict(forest_dataset_train)*y_std_train + y_bar_train
   if (adaptive_coding) {
-    tau_hat_train_raw <- as.vector(as.matrix(full_design_matrix_train) %*% c(alpha, beta, beta_int))
+    tau_hat_train_raw <- as.vector(as.matrix(full_design_matrix_train) %*% c(alpha_real, beta_real, beta_int_real))
     tau_hat_train <- t(t(tau_hat_train_raw) * (b_1_samples - b_0_samples))*y_std_train
   } else {
-    tau_x_raw_train <- as.vector(as.matrix(full_design_matrix_train) %*% c(alpha, beta, beta_int))
+    tau_x_raw_train <- as.vector(as.matrix(full_design_matrix_train) %*% c(alpha_real, beta_real, beta_int_real))
     tau_hat_train <- tau_x_raw_train
   }
-  y_hat_train <- mu_hat_train + as.vector(as.matrix(full_design_matrix_train) %*% c(alpha, beta, beta_int))* as.numeric(Z_train)
+  y_hat_train <- mu_hat_train + as.vector(as.matrix(full_design_matrix_train) %*% c(alpha_real, beta_real, beta_int_real))* as.numeric(Z_train)
+
   if (has_test) {
     mu_hat_test <- forest_samples_mu$predict(forest_dataset_test)*y_std_train + y_bar_train
     if (adaptive_coding) {
@@ -1965,7 +1932,8 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
     } else {
       tau_hat_test <- forest_samples_tau$predict_raw(forest_dataset_test)*y_std_train
     }
-    y_hat_test <- mu_hat_test + tau_hat_test * as.numeric(Z_test)
+    y_hat_test <- mu_hat_test + tau_hat_test * as.numeric(Z_test)
+
   }
   if (include_variance_forest) {
     sigma2_x_hat_train <- forest_samples_variance$predict(forest_dataset_train)
@@ -2085,9 +2053,6 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
       "Tau_glob" = tau_glob_samples,
       "interaction_pairs" = int_pairs_matrix
     )}
-  if (propensity_seperate == "mu"){
-    result[["gamma"]] = gamma_samples
-  }
   if (has_test) result[["mu_hat_test"]] = mu_hat_test
   if (has_test) result[["tau_hat_test"]] = tau_hat_test
   if (has_test) result[["y_hat_test"]] = y_hat_test

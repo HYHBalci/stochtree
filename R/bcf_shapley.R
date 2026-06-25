@@ -1247,20 +1247,17 @@ bcf_linear_shapley <- function(X_train, Z_train, y_train, propensity_train = NUL
           X_design = X_design,
           XtX_design = XtX_design,
           X = if (propensity_seperate == "tau") X_train else X_train_raw,
-          Phi = Phi_train,
           Z = Z_linear,
           propensity_train = propensity_train, 
           residual = tau_residual,
           are_continuous = as.vector(as.integer(boolean_continuous*1)),
           alpha_tilde = alpha, 
-          gamma_prop = gamma_prop, 
+          gamma = gamma_prop, 
           beta_tilde = beta,
           beta_int_tilde = beta_int,
           gamma_tilde = gamma_shap,
           tau_beta = tau_beta,
-          tau_gamma = tau_gamma,
           nu = nu,
-          nu_gamma = nu_gamma,
           xi = xi,
           tau_int = 1.0,
           sigma = sqrt(sigma2_lin),
@@ -1270,28 +1267,23 @@ bcf_linear_shapley <- function(X_train, Z_train, y_train, propensity_train = NUL
           unlink = unlink,
           gibbs = gibbs, 
           regularize_ATE = regularize_ATE,
-          hn_scale = hn_scale,
-          use_prognostic_shapley = shapley
+          hn_scale = hn_scale
         )
       } else {
         update_results <- updateLinearTreatmentCpp_cpp(
           X_design = X_design,
           XtX_design = XtX_design,
           X = if (propensity_seperate == "tau") X_train else X_train_raw,
-          Phi = Phi_train,
           Z = Z_linear,
           propensity_train = propensity_train,
           residual = tau_residual,
           are_continuous = as.vector(as.integer(boolean_continuous*1)),
           alpha = alpha,
-          gamma_prop = gamma_prop,
+          gamma = gamma_prop,
           beta = beta,
           beta_int = beta_int,
-          gamma = gamma_shap,
           tau_beta = tau_beta,
-          tau_gamma = tau_gamma,
           nu = nu,
-          nu_gamma = nu_gamma,
           xi = xi,
           tau_int = tau_int,
           sigma = sqrt(sigma2_lin),
@@ -1306,8 +1298,7 @@ bcf_linear_shapley <- function(X_train, Z_train, y_train, propensity_train = NUL
           step_out = step_out,
           propensity_seperate = propensity_seperate,
           regularize_ATE = regularize_ATE,
-          hn_scale = hn_scale,
-          use_prognostic_shapley = shapley
+          hn_scale = hn_scale
         )
       }
       
@@ -1384,7 +1375,7 @@ bcf_linear_shapley <- function(X_train, Z_train, y_train, propensity_train = NUL
       if (adaptive_coding) {
         # Estimate mu(X) and tau(X) and compute y - mu(X)
         mu_x_raw_train <- active_forest_mu$predict_raw(forest_dataset_train)
-        tau_x_raw_train <- predict_interaction_lm(X_train_raw, c(alpha, beta, beta_int), X_final_var_info)
+        tau_x_raw_train <- predict_interaction_lm(X_train_raw, c(alpha_real, beta_real, beta_int_real), X_final_var_info)
         partial_resid_mu_train <- resid_train - mu_x_raw_train
         if (has_rfx) {
           rfx_preds_train <- rfx_model$predict(rfx_dataset_train, rfx_tracker_train)
@@ -1613,7 +1604,7 @@ bcf_linear_shapley <- function(X_train, Z_train, y_train, propensity_train = NUL
           # Sample latent probit variable, z | -
           mu_forest_pred <- active_forest_mu$predict(forest_dataset_train)
           # come here
-          tau_forest_pred <- as.vector(as.matrix(full_design_matrix_train)  %*% c(alpha, beta, beta_int))
+          tau_forest_pred <- as.vector(as.matrix(full_design_matrix_train)  %*% c(alpha_real, beta_real, beta_int_real))
           
           forest_pred <- mu_forest_pred + Z_linear*tau_forest_pred
           mu0 <- forest_pred[y_train == 0]
@@ -1724,20 +1715,17 @@ bcf_linear_shapley <- function(X_train, Z_train, y_train, propensity_train = NUL
             X_design = X_design,
           XtX_design = XtX_design,
           X = if (propensity_seperate == "tau") X_train else X_train_raw,
-            Phi = Phi_train,
             Z = Z_linear,
             propensity_train = propensity_train, 
             residual = tau_residual,
             are_continuous = as.vector(as.integer(boolean_continuous*1)),
             alpha_tilde = alpha, 
-            gamma_prop = gamma_prop, 
+            gamma = gamma_prop, 
             beta_tilde = beta,
             beta_int_tilde = beta_int,
             gamma_tilde = gamma_shap,
             tau_beta = tau_beta,
-            tau_gamma = tau_gamma,
             nu = nu,
-            nu_gamma = nu_gamma,
             xi = xi,
             tau_int = 1.0,
             sigma = sqrt(sigma2_lin),
@@ -1747,28 +1735,23 @@ bcf_linear_shapley <- function(X_train, Z_train, y_train, propensity_train = NUL
             unlink = unlink,
             gibbs = gibbs, 
             regularize_ATE = regularize_ATE,
-            hn_scale = hn_scale,
-            use_prognostic_shapley = shapley
+            hn_scale = hn_scale
           )
         } else {
           update_results <- updateLinearTreatmentCpp_cpp(
             X_design = X_design,
           XtX_design = XtX_design,
           X = if (propensity_seperate == "tau") X_train else X_train_raw,
-            Phi = Phi_train,
             Z = Z_linear,
             propensity_train = propensity_train,
             residual = tau_residual,
             are_continuous = as.vector(as.integer(boolean_continuous*1)),
             alpha = alpha,
-            gamma_prop = gamma_prop,
+            gamma = gamma_prop,
             beta = beta,
             beta_int = beta_int,
-            gamma = gamma_shap,
             tau_beta = tau_beta,
-            tau_gamma = tau_gamma,
             nu = nu,
-            nu_gamma = nu_gamma,
             xi = xi,
             tau_int = tau_int,
             sigma = sqrt(sigma2_lin),
@@ -1783,8 +1766,7 @@ bcf_linear_shapley <- function(X_train, Z_train, y_train, propensity_train = NUL
             step_out = step_out,
             propensity_seperate = propensity_seperate,
             regularize_ATE = regularize_ATE,
-            hn_scale = hn_scale,
-            use_prognostic_shapley = shapley
+            hn_scale = hn_scale
           )
         }
         
@@ -1856,48 +1838,20 @@ bcf_linear_shapley <- function(X_train, Z_train, y_train, propensity_train = NUL
           outcome_train$update_data(matrix(residual, ncol=1))
         }
 
-        if(use_ncp) {
-            ate_offset <- as.integer(regularize_ATE)
-            tau_beta_main_indices <- (1 + ate_offset):(p_mod + ate_offset)
-            
-            if(regularize_ATE) {
-              alpha_real <- alpha * tau_beta[1] * tau_glob
-            } else {
-              alpha_real <- alpha
-            }
-            
-            beta_real <- beta * tau_beta[tau_beta_main_indices] * tau_glob
-            
-            if(p_int > 0) {
-              if(unlink) {
-                tau_beta_int_indices <- (p_mod + ate_offset + 1):length(tau_beta)
-                beta_int_real <- beta_int * tau_beta[tau_beta_int_indices] * tau_glob
-              } else {
-                int_pairs_matrix <- interaction_pairs(p_mod, boolean_continuous)
-                
-                beta_int_real <- numeric(p_int)
-                for (k in 1:p_int) {
-                  # Pak de 1-gebaseerde indexen (i, j) van de hoofdeffecten
-                  idx_i <- int_pairs_matrix[1, k]
-                  idx_j <- int_pairs_matrix[2, k]
-                  
-                  # Vind de bijbehorende tau_beta waarden (met offset)
-                  tau_i <- tau_beta[idx_i + ate_offset]
-                  tau_j <- tau_beta[idx_j + ate_offset]
-                  
-                  # Pas de NCP-formule toe
-                  beta_int_real[k] <- beta_int[k] * tau_glob * (sqrt(tau_int) * tau_i * tau_j)
-                }
-              }            
-            } else {
-              beta_int_real <- numeric(0)
-            }
-            
+        if (use_ncp) {
+          real_params_vec <- update_results$real_params
+          alpha_real <- real_params_vec[1]
+          beta_real <- real_params_vec[6:(5 + p_mod)]
+          if(p_int > 0) {
+            beta_int_real <- real_params_vec[(6 + p_mod):(5 + p_mod + p_int)]
           } else {
-            alpha_real <- alpha
-            beta_real <- beta
-            beta_int_real <- beta_int
+            beta_int_real <- numeric(0)
           }
+        } else {
+          alpha_real <- alpha
+          beta_real <- beta
+          beta_int_real <- beta_int
+        }
 
           
           if(keep_sample){
@@ -2043,7 +1997,7 @@ bcf_linear_shapley <- function(X_train, Z_train, y_train, propensity_train = NUL
   } else {
     tau_hat_train <- forest_samples_tau$predict_raw(forest_dataset_train)*y_std_train
   }
-  y_hat_train <- mu_hat_train + predict_interaction_lm(if(propensity_seperate == "tau") X_train else X_train_raw, c(alpha, beta, beta_int), X_final_var_info, interaction_rule, propensity_seperate) * as.numeric(Z_train)
+  y_hat_train <- mu_hat_train + predict_interaction_lm(if(propensity_seperate == "tau") X_train else X_train_raw, c(alpha_real, beta_real, beta_int_real), X_final_var_info, interaction_rule, propensity_seperate) * as.numeric(Z_train)
   if (has_test) {
     mu_hat_test <- forest_samples_mu$predict(forest_dataset_test)*y_std_train + y_bar_train
     if (adaptive_coding) {
