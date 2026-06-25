@@ -236,6 +236,8 @@ double sample_tau_global_slice_old(double tau_old,
 
 [[cpp11::register]]
 cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
+    const cpp11::doubles_matrix<>& X_design,
+    const cpp11::doubles_matrix<>& XtX_design,
     const cpp11::doubles_matrix<>& X,
     const cpp11::doubles& Z,
     const cpp11::doubles& propensity_train,
@@ -345,17 +347,8 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
     if (use_bhatt_sampler) {
       // Bhattacharya sampler (for p > n)
       
-      // Construct combined design matrix X_combined (n x P_combined)
-      Eigen::MatrixXd X_combined(n, P_combined);
-      if(regularize_ATE){
-        X_combined.col(0) = Z_map;
-      }
-      for (int j = 0; j < p_mod; ++j) { 
-        X_combined.col(j + regularize_ATE) = Z_map.array() * X_map.col(j).array();
-      } 
-      for (size_t k = 0; k < int_pairs.size(); ++k) {
-        X_combined.col(p_mod + regularize_ATE + k) = Z_map.array() * X_map.col(int_pairs[k].first).array() * X_map.col(int_pairs[k].second).array();
-      }
+      // Use precomputed X_design instead of manually constructing X_combined
+      Eigen::Map<const Eigen::MatrixXd> X_design_map(REAL(X_design), n, P_combined);
       
       double sigma2 = sigma * sigma;
       Eigen::MatrixXd D_scaled_mat = D_mat; // Create the scaled prior covariance
@@ -367,9 +360,9 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
       Eigen::VectorXd delta(n);
       for (int i = 0; i < n; ++i) delta(i) = Rf_rnorm(0.0, 1.0);
       
-      Eigen::VectorXd v = X_combined * u + delta;
+      Eigen::VectorXd v = X_design_map * u + delta;
       
-      Eigen::MatrixXd M_solve = X_combined * D_scaled_mat * X_combined.transpose();
+      Eigen::MatrixXd M_solve = X_design_map * D_scaled_mat * X_design_map.transpose();
       M_solve.diagonal().array() += 1.0; 
       
       Eigen::VectorXd y_target_scaled = y_target / sigma; 
@@ -379,7 +372,7 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
         cpp11::warning("Cholesky of n x n system failed in fast sampler. Betas not updated.");
       } else { 
         Eigen::VectorXd w = lltOfM.solve(y_target_scaled - v);
-        Eigen::VectorXd beta_tilde_new = u + D_scaled_mat * X_combined.transpose() * w;
+        Eigen::VectorXd beta_tilde_new = u + D_scaled_mat * X_design_map.transpose() * w;
         
         beta_combined_new_eigen = sigma * beta_tilde_new;
         
@@ -397,24 +390,12 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
     } else {
       // Standard Gibbs Sampler (for p < n)
       
-      // Step A: Calculate XtX and Xt_y on the fly
-      Eigen::MatrixXd XtX = Eigen::MatrixXd::Zero(P_combined, P_combined);
-      Eigen::VectorXd Xt_y = Eigen::VectorXd::Zero(P_combined);
-      for (int i = 0; i < n; ++i) {
-        Eigen::VectorXd x_row_combined(P_combined);
-        if(regularize_ATE){
-          x_row_combined(0) = Z_map(i);
-        }
-        for (int j = 0; j < p_mod; ++j) {
-          x_row_combined(j + regularize_ATE) = Z_map(i) * X_map(i, j);
-        }
-        for (size_t k = 0; k < int_pairs.size(); ++k) {
-          x_row_combined(p_mod + regularize_ATE + k) = Z_map(i) * X_map(i, int_pairs[k].first) * X_map(i, int_pairs[k].second);
-        }
-        XtX.selfadjointView<Eigen::Lower>().rankUpdate(x_row_combined);
-        Xt_y += x_row_combined * y_target(i);
-      }
-      XtX = XtX.selfadjointView<Eigen::Lower>();
+      Eigen::Map<const Eigen::MatrixXd> X_design_map(REAL(X_design), n, P_combined);
+      Eigen::Map<const Eigen::MatrixXd> XtX_design_map(REAL(XtX_design), P_combined, P_combined);
+    
+      // Step A: Use precomputed XtX and calculate Xt_y
+      Eigen::MatrixXd XtX = XtX_design_map;
+      Eigen::VectorXd Xt_y = X_design_map.transpose() * y_target;
       
       Eigen::VectorXd D_inv_diag = D_diag.cwiseInverse();
       
@@ -580,24 +561,12 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
     // 3. Block sample all beta coefficients
     Eigen::VectorXd beta_combined_new_eigen(P_combined);
     
-    // Step A: Calculate XtX and Xt_y
-    Eigen::MatrixXd XtX = Eigen::MatrixXd::Zero(P_combined, P_combined);
-    Eigen::VectorXd Xt_y = Eigen::VectorXd::Zero(P_combined);
-    for (int i = 0; i < n; ++i) {
-      Eigen::VectorXd x_row_combined(P_combined); // Declaration inside loop for clarity
-      if(regularize_ATE){
-        x_row_combined(0) = Z_map(i);
-      }
-      for (int j = 0; j < p_mod; ++j) {
-        x_row_combined(j + regularize_ATE) = Z_map(i) * X_map(i, j);
-      }
-      for (size_t k = 0; k < int_pairs.size(); ++k) {
-        x_row_combined(p_mod + k + regularize_ATE) = Z_map(i) * X_map(i, int_pairs[k].first) * X_map(i, int_pairs[k].second);
-      }
-      XtX.selfadjointView<Eigen::Lower>().rankUpdate(x_row_combined);
-      Xt_y += x_row_combined * y_target(i);
-    }
-    XtX = XtX.selfadjointView<Eigen::Lower>();
+    Eigen::Map<const Eigen::MatrixXd> X_design_map(REAL(X_design), n, P_combined);
+    Eigen::Map<const Eigen::MatrixXd> XtX_design_map(REAL(XtX_design), P_combined, P_combined);
+    
+    // Step A: Use precomputed XtX and calculate Xt_y
+    Eigen::MatrixXd XtX = XtX_design_map;
+    Eigen::VectorXd Xt_y = X_design_map.transpose() * y_target;
     
     // Step B: Form the unscaled posterior precision matrix (X'X + D^-1)
     Eigen::VectorXd D_inv_diag = D_diag.cwiseInverse();
@@ -738,6 +707,8 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
 
 [[cpp11::register]]
 cpp11::writable::list updateLinearTreatmentCpp_NCP_cpp_old(
+    const cpp11::doubles_matrix<>& X_design,
+    const cpp11::doubles_matrix<>& XtX_design,
     const cpp11::doubles_matrix<>& X,
     const cpp11::doubles& Z,
     const cpp11::doubles& propensity_train,
@@ -799,16 +770,16 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_cpp_old(
   double alpha_current = alpha_tilde; // Will be overwritten if regularize_ATE=true
   
   if(regularize_ATE) {
-    alpha_current = alpha_tilde * tau_beta[0] * tau_glob;
+    alpha_current = alpha_tilde * tau_beta[0] * tau_glob * sigma;
   }
   for (int j = 0; j < p_mod; ++j) {
-    beta_current(j) = beta_tilde_map(j) * tau_beta[j + regularize_ATE] * tau_glob;
+    beta_current(j) = beta_tilde_map(j) * tau_beta[j + regularize_ATE] * tau_glob * sigma;
   }
   for (size_t k = 0; k < int_pairs.size(); ++k) {
     double V_k_star_tau_only = unlink ?
     (tau_beta[p_mod + regularize_ATE + k]) :
     (std::sqrt(tau_int) * tau_beta[int_pairs[k].first + regularize_ATE] * tau_beta[int_pairs[k].second + regularize_ATE]);
-    beta_int_current(k) = beta_int_tilde_map(k) * V_k_star_tau_only * tau_glob;
+    beta_int_current(k) = beta_int_tilde_map(k) * V_k_star_tau_only * tau_glob * sigma;
   }
   
   // --- GAMMA & ALPHA UPDATES (VECTORIZED) ---
@@ -966,17 +937,17 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_cpp_old(
     // (This step is vital before sampling taus)
     if(regularize_ATE) {
       double tau_glob_main = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
-      alpha_current = alpha_tilde * tau_beta[0] * tau_glob_main;
+      alpha_current = alpha_tilde * tau_beta[0] * tau_glob_main * sigma;
     }
     for (int j = 0; j < p_mod; ++j) {
       double tau_glob_main = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
-      beta_current(j) = beta_tilde_map(j) * tau_beta[j + regularize_ATE] * tau_glob_main;
+      beta_current(j) = beta_tilde_map(j) * tau_beta[j + regularize_ATE] * tau_glob_main * sigma;
     }
     for (size_t k = 0; k < int_pairs.size(); ++k) {
       double V_k_star_tau_only = unlink ?
       (tau_beta[p_mod + regularize_ATE + k]) :
       (std::sqrt(tau_int) * tau_beta[int_pairs[k].first + regularize_ATE] * tau_beta[int_pairs[k].second + regularize_ATE]);
-      beta_int_current(k) = beta_int_tilde_map(k) * V_k_star_tau_only * tau_glob;
+      beta_int_current(k) = beta_int_tilde_map(k) * V_k_star_tau_only * tau_glob * sigma;
     }
     
     Eigen::VectorXd new_fit = Eigen::VectorXd::Zero(n);

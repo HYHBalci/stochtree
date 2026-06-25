@@ -226,11 +226,13 @@ double sample_tau_global_slice_amr(double tau_amr,
 
 [[cpp11::register]]
 cpp11::writable::list updateLinearTreatmentCpp_amr(
+    const cpp11::doubles& obs_weights,
+    const cpp11::doubles_matrix<>& X_design,
+    const cpp11::doubles_matrix<>& XtX_design,
     const cpp11::doubles_matrix<>& X,
     const cpp11::doubles& Z,
     const cpp11::doubles& propensity_train,
     cpp11::writable::doubles residual,
-    const cpp11::doubles& obs_weights,
     const cpp11::r_vector<int>& are_continuous,
     double alpha,
     double gamma, // propensity coefficient.
@@ -335,17 +337,8 @@ cpp11::writable::list updateLinearTreatmentCpp_amr(
     if (use_bhatt_sampler) {
       // Bhattacharya sampler (for p > n)
       
-      // Construct combined design matrix X_combined (n x P_combined)
-      Eigen::MatrixXd X_combined(n, P_combined);
-      if(regularize_ATE){
-        X_combined.col(0) = Z_map;
-      }
-      for (int j = 0; j < p_mod; ++j) { 
-        X_combined.col(j + regularize_ATE) = Z_map.array() * X_map.col(j).array();
-      } 
-      for (size_t k = 0; k < int_pairs.size(); ++k) {
-        X_combined.col(p_mod + regularize_ATE + k) = Z_map.array() * X_map.col(int_pairs[k].first).array() * X_map.col(int_pairs[k].second).array();
-      }
+      // Use precomputed X_design instead of manually constructing X_combined
+      Eigen::Map<const Eigen::MatrixXd> X_design_map(REAL(X_design), n, P_combined);
       
       double sigma2 = sigma * sigma;
       Eigen::MatrixXd D_scaled_mat = D_mat; // Create the scaled prior covariance
@@ -357,9 +350,9 @@ cpp11::writable::list updateLinearTreatmentCpp_amr(
       Eigen::VectorXd delta(n);
       for (int i = 0; i < n; ++i) delta(i) = Rf_rnorm(0.0, 1.0 / std::sqrt(obs_weights[i]));
       
-      Eigen::VectorXd v = X_combined * u + delta;
+      Eigen::VectorXd v = X_design_map * u + delta;
       
-      Eigen::MatrixXd M_solve = X_combined * D_scaled_mat * X_combined.transpose();
+      Eigen::MatrixXd M_solve = X_design_map * D_scaled_mat * X_design_map.transpose();
       for (int i = 0; i < n; ++i) M_solve(i,i) += 1.0 / obs_weights[i]; 
       
       Eigen::VectorXd y_target_scaled = y_target / sigma; 
@@ -373,7 +366,7 @@ cpp11::writable::list updateLinearTreatmentCpp_amr(
         cpp11::warning("Cholesky of n x n system failed in fast sampler even with jitter. Betas not updated.");
       } else { 
         Eigen::VectorXd w = lltOfM.solve(y_target_scaled - v);
-        Eigen::VectorXd beta_tilde_new = u + D_scaled_mat * X_combined.transpose() * w;
+        Eigen::VectorXd beta_tilde_new = u + D_scaled_mat * X_design_map.transpose() * w;
         
         beta_combined_new_eigen = sigma * beta_tilde_new;
         
@@ -391,24 +384,11 @@ cpp11::writable::list updateLinearTreatmentCpp_amr(
     } else {
       // Standard Gibbs Sampler (for p < n)
       
-      // Step A: Calculate XtX and Xt_y on the fly
-      Eigen::MatrixXd XtX = Eigen::MatrixXd::Zero(P_combined, P_combined);
-      Eigen::VectorXd Xt_y = Eigen::VectorXd::Zero(P_combined);
-      Eigen::VectorXd x_row_combined(P_combined);
-      for (int i = 0; i < n; ++i) {
-        if(regularize_ATE){
-          x_row_combined(0) = Z_map(i);
-        }
-        for (int j = 0; j < p_mod; ++j) {
-          x_row_combined(j + regularize_ATE) = Z_map(i) * X_map(i, j);
-        }
-        for (size_t k = 0; k < int_pairs.size(); ++k) {
-          x_row_combined(p_mod + regularize_ATE + k) = Z_map(i) * X_map(i, int_pairs[k].first) * X_map(i, int_pairs[k].second);
-        }
-        XtX.selfadjointView<Eigen::Lower>().rankUpdate(x_row_combined, obs_weights[i]);
-        Xt_y += x_row_combined * (y_target(i) * obs_weights[i]);
-      }
-      XtX = XtX.selfadjointView<Eigen::Lower>();
+      // Step A: Calculate XtX and Xt_y using precomputed X_design
+      Eigen::Map<const Eigen::MatrixXd> X_design_map(REAL(X_design), n, P_combined);
+      Eigen::Map<const Eigen::VectorXd> weights_map(REAL(obs_weights), n);
+      Eigen::MatrixXd XtX = X_design_map.transpose() * weights_map.asDiagonal() * X_design_map;
+      Eigen::VectorXd Xt_y = X_design_map.transpose() * (y_target.array() * weights_map.array()).matrix();
       
       Eigen::VectorXd D_inv_diag = D_diag.cwiseInverse();
       
@@ -585,24 +565,12 @@ cpp11::writable::list updateLinearTreatmentCpp_amr(
     // 3. Block sample all beta coefficients
     Eigen::VectorXd beta_combined_new_eigen(P_combined);
     
-    // Step A: Calculate XtX and Xt_y
-    Eigen::MatrixXd XtX = Eigen::MatrixXd::Zero(P_combined, P_combined);
-    Eigen::VectorXd Xt_y = Eigen::VectorXd::Zero(P_combined);
-    Eigen::VectorXd x_row_combined(P_combined); // Brought outside loop
-    for (int i = 0; i < n; ++i) {
-      if(regularize_ATE){
-        x_row_combined(0) = Z_map(i);
-      }
-      for (int j = 0; j < p_mod; ++j) {
-        x_row_combined(j + regularize_ATE) = Z_map(i) * X_map(i, j);
-      }
-      for (size_t k = 0; k < int_pairs.size(); ++k) {
-        x_row_combined(p_mod + k + regularize_ATE) = Z_map(i) * X_map(i, int_pairs[k].first) * X_map(i, int_pairs[k].second);
-      }
-      XtX.selfadjointView<Eigen::Lower>().rankUpdate(x_row_combined, obs_weights[i]);
-      Xt_y += x_row_combined * (y_target(i) * obs_weights[i]);
-    }
-    XtX = XtX.selfadjointView<Eigen::Lower>();
+    Eigen::Map<const Eigen::MatrixXd> X_design_map(REAL(X_design), n, P_combined);
+    Eigen::Map<const Eigen::VectorXd> weights_map(REAL(obs_weights), n);
+    
+    // Step A: Calculate XtX and Xt_y using precomputed X_design
+    Eigen::MatrixXd XtX = X_design_map.transpose() * weights_map.asDiagonal() * X_design_map;
+    Eigen::VectorXd Xt_y = X_design_map.transpose() * (y_target.array() * weights_map.array()).matrix();
     
     // Step B: Form the unscaled posterior precision matrix (X'X + D^-1)
     Eigen::VectorXd D_inv_diag = D_diag.cwiseInverse();
@@ -631,13 +599,7 @@ cpp11::writable::list updateLinearTreatmentCpp_amr(
     for(int k=0; k<p_int; ++k) beta_int[k] = beta_combined_new_eigen(p_mod + k + regularize_ATE);
     
     // 5. Update residual map based on new coefficients
-    Eigen::VectorXd new_fit = Eigen::VectorXd::Zero(n);
-    if(regularize_ATE){
-      new_fit.array() += Z_map.array() * alpha;
-    }
-    for (int j=0; j<p_mod; ++j) new_fit.array() += Z_map.array() * X_map.col(j).array() * beta[j];
-    for (size_t k = 0; k < int_pairs.size(); ++k) new_fit.array() += Z_map.array() * X_map.col(int_pairs[k].first).array() * X_map.col(int_pairs[k].second).array() * beta_int[k];
-    residual_map = y_target - new_fit;
+    residual_map = y_target - X_design_map * beta_combined_new_eigen;
     
     // 6. Sample tau_beta using slice sampler, now conditional on the new block of betas
     std::vector<double> beta_int_std(beta_int.begin(), beta_int.end());
@@ -740,6 +702,8 @@ cpp11::writable::list updateLinearTreatmentCpp_amr(
 
 [[cpp11::register]]
 cpp11::writable::list updateLinearTreatmentCpp_NCP_amr(
+    const cpp11::doubles_matrix<>& X_design,
+    const cpp11::doubles_matrix<>& XtX_design,
     const cpp11::doubles_matrix<>& X,
     const cpp11::doubles& Z,
     const cpp11::doubles& propensity_train,
@@ -802,16 +766,16 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_amr(
   double alpha_current = alpha_tilde; // Will be overwritten if regularize_ATE=true
   
   if(regularize_ATE) {
-    alpha_current = alpha_tilde * tau_beta[0] * tau_glob;
+    alpha_current = alpha_tilde * tau_beta[0] * tau_glob * sigma;
   }
   for (int j = 0; j < p_mod; ++j) {
-    beta_current(j) = beta_tilde_map(j) * tau_beta[j + regularize_ATE] * tau_glob;
+    beta_current(j) = beta_tilde_map(j) * tau_beta[j + regularize_ATE] * tau_glob * sigma;
   }
   for (size_t k = 0; k < int_pairs.size(); ++k) {
     double V_k_star_tau_only = unlink ?
     (tau_beta[p_mod + regularize_ATE + k]) :
     (std::sqrt(tau_int) * tau_beta[int_pairs[k].first + regularize_ATE] * tau_beta[int_pairs[k].second + regularize_ATE]);
-    beta_int_current(k) = beta_int_tilde_map(k) * V_k_star_tau_only * tau_glob;
+    beta_int_current(k) = beta_int_tilde_map(k) * V_k_star_tau_only * tau_glob * sigma;
   }
   
   // --- GAMMA & ALPHA UPDATES (VECTORIZED) ---
@@ -866,7 +830,7 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_amr(
       for (int j = 0; j < p_mod; ++j) { 
         X_star.col(j + regularize_ATE) = Z_map.array() * X_map.col(j).array() * tau_beta[j + regularize_ATE] * tau_glob;
       } 
-      for (size_t k = 0; k < int_pairs.size(); ++k) {
+      for (int k = 0; k < int_pairs.size(); ++k) {
         double V_k_star_tau_only = unlink ?
         (tau_beta[p_mod + regularize_ATE + k]) :
         (std::sqrt(tau_int) * tau_beta[int_pairs[k].first + regularize_ATE] * tau_beta[int_pairs[k].second + regularize_ATE]);
@@ -903,30 +867,28 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_amr(
       
     } else {
       // --- NCP Standard Gibbs Sampler (for p < n) ---
-      // Model: y_target ~ N(X* beta_tilde, sigma^2 I_n)
-      // Prior: beta_tilde ~ N(0, I_p)
       
-      // Step A: Calculate X*tX* and X*t_y
-      Eigen::MatrixXd XtX_star = Eigen::MatrixXd::Zero(P_combined, P_combined);
-      Eigen::VectorXd Xt_y_star = Eigen::VectorXd::Zero(P_combined);
-      Eigen::VectorXd x_row_star(P_combined);
-      for (int i = 0; i < n; ++i) {
-        if(regularize_ATE){
-          x_row_star(0) = Z_map(i) * tau_beta[0] * tau_glob;
-        }
-        for (int j = 0; j < p_mod; ++j) {
-          x_row_star(j + regularize_ATE) = Z_map(i) * X_map(i, j) * tau_beta[j + regularize_ATE] * tau_glob;
-        }
-        for (size_t k = 0; k < int_pairs.size(); ++k) {
-          double V_k_star_tau_only = unlink ?
-          (tau_beta[p_mod + regularize_ATE + k]) :
-          (std::sqrt(tau_int) * tau_beta[int_pairs[k].first + regularize_ATE] * tau_beta[int_pairs[k].second + regularize_ATE]);
-          x_row_star(p_mod + regularize_ATE + k) = Z_map(i) * X_map(i, int_pairs[k].first) * X_map(i, int_pairs[k].second) * V_k_star_tau_only * tau_glob;
-        }
-        XtX_star.selfadjointView<Eigen::Lower>().rankUpdate(x_row_star, obs_weights[i]);
-        Xt_y_star += x_row_star * (y_target(i) * obs_weights[i]);
+      Eigen::Map<const Eigen::MatrixXd> X_design_map(REAL(X_design), n, P_combined);
+      Eigen::Map<const Eigen::VectorXd> weights_map(REAL(obs_weights), n);
+      
+      // Step A: Calculate XtX and Xt_y using precomputed X_design
+      // We must scale the design matrix according to the NCP structure first
+      Eigen::MatrixXd X_star(n, P_combined);
+      if(regularize_ATE){
+        X_star.col(0) = Z_map.array() * tau_beta[0] * tau_glob;
       }
-      XtX_star = XtX_star.selfadjointView<Eigen::Lower>();
+      for (int j = 0; j < p_mod; ++j) { 
+        X_star.col(j + regularize_ATE) = Z_map.array() * X_map.col(j).array() * tau_beta[j + regularize_ATE] * tau_glob;
+      } 
+      for (int k = 0; k < int_pairs.size(); ++k) {
+        double V_k_star_tau_only = unlink ?
+        (tau_beta[p_mod + regularize_ATE + k]) :
+        (std::sqrt(tau_int) * tau_beta[int_pairs[k].first + regularize_ATE] * tau_beta[int_pairs[k].second + regularize_ATE]);
+        X_star.col(p_mod + regularize_ATE + k) = Z_map.array() * X_map.col(int_pairs[k].first).array() * X_map.col(int_pairs[k].second).array() * V_k_star_tau_only * tau_glob;
+      }
+      
+      Eigen::MatrixXd XtX_star = X_star.transpose() * weights_map.asDiagonal() * X_star;
+      Eigen::VectorXd Xt_y_star = X_star.transpose() * (y_target.array() * weights_map.array()).matrix();
       
       // Post_Prec = (X*tX* / sigma^2) + I_p
       Eigen::MatrixXd Post_Prec = (XtX_star / sigma2) + Eigen::MatrixXd::Identity(P_combined, P_combined);
@@ -934,7 +896,6 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_amr(
       
       Eigen::LLT<Eigen::MatrixXd> lltOfA(Post_Prec);
       
-      // [FIX 2: Robust Cholesky with Jitter for NCP]
       if (lltOfA.info() != Eigen::Success) {
         Post_Prec.diagonal().array() += 1e-6; 
         lltOfA.compute(Post_Prec);
@@ -946,11 +907,9 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_amr(
         Eigen::VectorXd std_normal_draws(P_combined);
         for (int k = 0; k < P_combined; ++k) std_normal_draws(k) = Rf_rnorm(0.0, 1.0);
         
-        // Sample for tilde_beta does not include sigma
         beta_tilde_combined_new_eigen = post_mean_beta_tilde_eigen + L_chol.transpose().template triangularView<Eigen::Upper>().solve(std_normal_draws);
         
       } else {
-        // [FIX 2 Continued] Fallback: Keep old values
         cpp11::warning("Cholesky decomposition failed in NCP Gibbs sampler even with jitter. Betas not updated (kept previous).");
         if(regularize_ATE) beta_tilde_combined_new_eigen(0) = alpha_tilde;
         for(int j=0; j<p_mod; ++j) beta_tilde_combined_new_eigen(j + regularize_ATE) = beta_tilde[j];
@@ -966,18 +925,17 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_amr(
     for(int k=0; k<p_int; ++k) beta_int_tilde[k] = beta_tilde_combined_new_eigen(p_mod + k + regularize_ATE);
     
     // 4. Recalculate *real* coefficients and residual
-    // (This step is vital before sampling taus)
     if(regularize_ATE) {
-      alpha_current = alpha_tilde * tau_beta[0] * tau_glob;
+      alpha_current = alpha_tilde * tau_beta[0] * tau_glob * sigma;
     }
     for (int j = 0; j < p_mod; ++j) {
-      beta_current(j) = beta_tilde_map(j) * tau_beta[j + regularize_ATE] * tau_glob;
+      beta_current(j) = beta_tilde_map(j) * tau_beta[j + regularize_ATE] * tau_glob * sigma;
     }
     for (size_t k = 0; k < int_pairs.size(); ++k) {
       double V_k_star_tau_only = unlink ?
       (tau_beta[p_mod + regularize_ATE + k]) :
       (std::sqrt(tau_int) * tau_beta[int_pairs[k].first + regularize_ATE] * tau_beta[int_pairs[k].second + regularize_ATE]);
-      beta_int_current(k) = beta_int_tilde_map(k) * V_k_star_tau_only * tau_glob;
+      beta_int_current(k) = beta_int_tilde_map(k) * V_k_star_tau_only * tau_glob * sigma;
     }
     
     Eigen::VectorXd new_fit = Eigen::VectorXd::Zero(n);
@@ -989,7 +947,6 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_amr(
     residual_map = y_target - new_fit;
     
     // 5. Sample local shrinkage parameters tau_beta (and nu)
-    // *** THIS IS THE KEY NCP STEP: sigma2 IS REMOVED ***
     if (sample_global_prior == "hybrid") {
       for(int j = 0; j < p_mod + regularize_ATE; j++){
         tau_beta[j] = 10.0;

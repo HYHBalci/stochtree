@@ -210,9 +210,9 @@ bcf_linear_shapley <- function(X_train, Z_train, y_train, propensity_train = NUL
   
   # Data handling
   if(is.character(sample_global_prior)){
-    sample_global_prior <- match.arg(sample_global_prior, c("half-cauchy", "half-normal", "none", "OLS"))
+    sample_global_prior <- match.arg(sample_global_prior, c("half-cauchy", "half-normal", "none", "OLS", "hybrid"))
   } else {
-    stop("sample_global_prior must be a string: 'half-cauchy', 'half-normal', 'none', or 'OLS'")
+    stop("sample_global_prior must be a string: 'half-cauchy', 'half-normal', 'none', 'OLS', or 'hybrid'")
   }
   if(general_params_updated$verbose){
     print("Pre-Processing data!")

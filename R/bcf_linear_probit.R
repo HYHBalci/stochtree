@@ -1013,6 +1013,33 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
 
   obs_weights <- rep(1.0, n)
   
+  # Precompute design matrices helper
+  X_main_for_design <- if (propensity_seperate == "tau") X_train else X_train_raw
+  X_main_with_int <- X_main_for_design
+  if (p_int > 0) {
+    X_int <- matrix(nrow = n, ncol = p_int)
+    for (k in 1:p_int) {
+      X_int[, k] <- X_main_for_design[, int_pairs_matrix[1, k]] * X_main_for_design[, int_pairs_matrix[2, k]]
+    }
+    X_main_with_int <- cbind(X_main_with_int, X_int)
+  }
+
+  compute_design_matrices <- function(Z_lin) {
+    if (regularize_ATE) {
+      Xd <- cbind(as.vector(Z_lin), as.vector(Z_lin) * X_main_with_int)
+    } else {
+      Xd <- as.vector(Z_lin) * X_main_with_int
+    }
+    XtXd <- crossprod(Xd)
+    return(list(X_design = Xd, XtX_design = XtXd))
+  }
+
+  # Precompute baseline design matrices
+  Z_linear <- Z_train
+  design_mats <- compute_design_matrices(Z_linear)
+  X_design <- design_mats$X_design
+  XtX_design <- design_mats$XtX_design
+
   # Run GFR (warm start) if specified
   if (num_gfr > 0){
     for (i in 1:num_gfr) {
@@ -1029,8 +1056,9 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
       # Sample the treatment forest
       if(adaptive_coding){
         Z_linear <- tau_basis_train
-      } else {
-        Z_linear <- Z_train
+        design_mats <- compute_design_matrices(Z_linear)
+        X_design <- design_mats$X_design
+        XtX_design <- design_mats$XtX_design
       }
       
       if (probit_outcome_model) {
@@ -1114,6 +1142,8 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
       # Prepare parameters for C++ call
       if(use_ncp == TRUE){
         update_results <- if(robust) updateLinearTreatmentCpp_NCP_amr(obs_weights = obs_weights, 
+          X_design = X_design,
+          XtX_design = XtX_design,
           X = if (propensity_seperate == "tau") X_train else X_train_raw,
           Z = Z_linear,
           propensity_train = propensity_train, 
@@ -1127,7 +1157,7 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           nu = nu,
           xi = xi,
           tau_int = 1.0,
-          sigma = sigma2_lin,
+          sigma = sqrt(sigma2_lin),
           alpha_prior_sd = 10.0,
           tau_glob = tau_glob,
           sample_global_prior = sample_global_prior,
@@ -1140,6 +1170,8 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           propensity_seperate = propensity_seperate,
           regularize_ATE = regularize_ATE,
           hn_scale = hn_scale) else updateLinearTreatmentCpp_NCP_cpp_old(
+          X_design = X_design,
+          XtX_design = XtX_design,
           X = if (propensity_seperate == "tau") X_train else X_train_raw,
           Z = Z_linear,
           propensity_train = propensity_train, 
@@ -1153,7 +1185,7 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           nu = nu,
           xi = xi,
           tau_int = 1.0,
-          sigma = sigma2_lin,
+          sigma = sqrt(sigma2_lin),
           alpha_prior_sd = 10.0,
           tau_glob = tau_glob,
           sample_global_prior = sample_global_prior,
@@ -1168,6 +1200,8 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           hn_scale = hn_scale)
       } else {
         update_results <- if(robust) updateLinearTreatmentCpp_amr(obs_weights = obs_weights, 
+          X_design = X_design,
+          XtX_design = XtX_design,
           X = if (propensity_seperate == "tau") X_train else X_train_raw,
           Z = Z_linear,
           propensity_train = propensity_train,
@@ -1181,7 +1215,7 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           nu = nu,
           xi = xi,
           tau_int = tau_int,
-          sigma = sigma2_lin,
+          sigma = sqrt(sigma2_lin),
           alpha_prior_sd = 10.0,
           tau_glob = tau_glob,
           sample_global_prior = sample_global_prior,
@@ -1194,6 +1228,8 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           propensity_seperate = propensity_seperate,
           regularize_ATE = regularize_ATE,
           hn_scale = hn_scale) else updateLinearTreatmentCpp_cpp_old(
+          X_design = X_design,
+          XtX_design = XtX_design,
           X = if (propensity_seperate == "tau") X_train else X_train_raw,
           Z = Z_linear,
           propensity_train = propensity_train,
@@ -1207,7 +1243,7 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           nu = nu,
           xi = xi,
           tau_int = tau_int,
-          sigma = sigma2_lin,
+          sigma = sqrt(sigma2_lin),
           alpha_prior_sd = 10.0,
           tau_glob = tau_glob,
           sample_global_prior = sample_global_prior,
@@ -1473,6 +1509,9 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           global_model_config$update_global_error_variance(current_sigma2)
         }
       }
+      
+      # Precompute design matrices helper already defined above
+      
       for (i in (num_gfr+1):num_samples) {
         is_mcmc <- i > (num_gfr + num_burnin)
         if (is_mcmc) {
@@ -1500,8 +1539,9 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
         
         if(adaptive_coding){
           Z_linear <- tau_basis_train
-        } else {
-          Z_linear <- Z_train
+          design_mats <- compute_design_matrices(Z_linear)
+          X_design <- design_mats$X_design
+          XtX_design <- design_mats$XtX_design
         }
         
         if (probit_outcome_model) {
@@ -1584,11 +1624,14 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
         # Linear Update Call (Repeated n_tijn times)
         for(v in 1:n_tijn){
           if(use_ncp){
-            update_results <- if(robust) updateLinearTreatmentCpp_NCP_amr(obs_weights = obs_weights, 
+            update_results <- if(robust) updateLinearTreatmentCpp_NCP_amr(
+          X_design = X_design,
+          XtX_design = XtX_design,
           X = if (propensity_seperate == "tau") X_train else X_train_raw,
           Z = Z_linear,
           propensity_train = propensity_train, 
           residual = tau_residual,
+          obs_weights = obs_weights,
           are_continuous = as.vector(as.integer(boolean_continuous*1)),
           alpha_tilde = alpha, 
           gamma = gamma,
@@ -1598,7 +1641,7 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           nu = nu,
           xi = xi,
           tau_int = 1.0,
-          sigma = sigma2_lin,
+          sigma = sqrt(sigma2_lin),
           alpha_prior_sd = 10.0,
           tau_glob = tau_glob,
           sample_global_prior = sample_global_prior,
@@ -1611,6 +1654,8 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           propensity_seperate = propensity_seperate,
           regularize_ATE = regularize_ATE,
           hn_scale = hn_scale) else updateLinearTreatmentCpp_NCP_cpp_old(
+              X_design = X_design,
+              XtX_design = XtX_design,
               X = if (propensity_seperate == "tau") X_train else X_train_raw,
               Z = Z_linear,
               propensity_train = propensity_train, 
@@ -1640,6 +1685,8 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
             
           } else {
             update_results <- if(robust) updateLinearTreatmentCpp_amr(obs_weights = obs_weights, 
+          X_design = X_design,
+          XtX_design = XtX_design,
           X = if (propensity_seperate == "tau") X_train else X_train_raw,
           Z = Z_linear,
           propensity_train = propensity_train,
@@ -1653,7 +1700,7 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           nu = nu,
           xi = xi,
           tau_int = tau_int,
-          sigma = sigma2_lin,
+          sigma = sqrt(sigma2_lin),
           alpha_prior_sd = 10.0,
           tau_glob = tau_glob,
           sample_global_prior = sample_global_prior,
@@ -1666,6 +1713,8 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           propensity_seperate = propensity_seperate,
           regularize_ATE = regularize_ATE,
           hn_scale = hn_scale) else updateLinearTreatmentCpp_cpp_old(
+              X_design = X_design,
+              XtX_design = XtX_design,
               X = if (propensity_seperate == "tau") X_train else X_train_raw,
               Z = Z_linear,
               propensity_train = propensity_train,

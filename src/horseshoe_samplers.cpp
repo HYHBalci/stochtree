@@ -129,20 +129,15 @@ writable::list updateLinearTreatmentCpp_cpp(
     const doubles_matrix<>& X_design,
     const doubles_matrix<>& XtX_design,
     const doubles_matrix<>& X,
-    const doubles_matrix<>& Phi,
     const doubles& Z,
     const doubles& propensity_train,
     writable::doubles residual,
     const cpp11::integers& are_continuous,
     double alpha,
-    double gamma_prop,
     writable::doubles beta,
     writable::doubles beta_int,
-    writable::doubles gamma,
     writable::doubles tau_beta,
-    writable::doubles tau_gamma,
     writable::doubles nu,
-    writable::doubles nu_gamma,
     double xi,
     double tau_int,
     double sigma,
@@ -157,14 +152,12 @@ writable::list updateLinearTreatmentCpp_cpp(
     double step_out,
     const std::string& propensity_seperate,
     bool regularize_ATE,
-    double hn_scale,
-    bool use_prognostic_shapley) {
+    double hn_scale) {
   
   GetRNGstate();
   
   int n = residual.size();
   int p_mod = X.ncol();
-  int p_prog = use_prognostic_shapley ? Phi.ncol() : 0; 
   int p_int = beta_int.size();
   
   if (sigma < 1e-6) sigma = 1e-6;
@@ -187,16 +180,8 @@ writable::list updateLinearTreatmentCpp_cpp(
   Eigen::Map<Eigen::VectorXd> residual_map((double*)residual.data(), n);
   Eigen::Map<const Eigen::VectorXd> Z_map((const double*)Z.data(), n);
   Eigen::Map<const Eigen::MatrixXd> X_map((const double*)X.data(), n, p_mod);
-  int phi_cols = (p_prog > 0) ? p_prog : 1;
-  Eigen::Map<const Eigen::MatrixXd> Phi_map((const double*)Phi.data(), n, phi_cols);
-   
+     
   // --- 1. Marginal Updates (Alpha / Propensity) ---
-  if (propensity_seperate == "mu") {
-    Eigen::Map<const Eigen::VectorXd> prop_map((const double*)propensity_train.data(), n);
-    residual_map += prop_map * gamma_prop;
-    gamma_prop = sample_alpha_linear(residual, propensity_train, sigma, 10.0);
-    residual_map -= prop_map * gamma_prop;
-  }  
   
   if (!regularize_ATE){
     residual_map += Z_map * alpha;
@@ -208,16 +193,14 @@ writable::list updateLinearTreatmentCpp_cpp(
   int offset_alpha = regularize_ATE ? 1 : 0;
   int offset_beta = offset_alpha;
   int offset_beta_int = offset_beta + p_mod;
-  int offset_gamma = offset_beta_int + p_int;
-  int P_combined = offset_gamma + p_prog; 
+  int P_combined = offset_beta_int + p_int; 
   
   if (gibbs) {
-    int P_combined = offset_gamma + p_prog;
+    int P_combined = offset_beta_int + p_int;
     
     Eigen::Map<Eigen::VectorXd> beta_map((double*)beta.data(), p_mod);
     Eigen::Map<Eigen::VectorXd> beta_int_map((double*)beta_int.data(), p_int);
-    Eigen::Map<Eigen::VectorXd> gamma_map((double*)gamma.data(), (p_prog > 0 ? p_prog : 1));
-    
+        
     Eigen::Map<const Eigen::MatrixXd> X_design_map((const double*)X_design.data(), n, P_combined);
     Eigen::Map<const Eigen::MatrixXd> XtX_design_map((const double*)XtX_design.data(), P_combined, P_combined);
     
@@ -226,9 +209,7 @@ writable::list updateLinearTreatmentCpp_cpp(
     if(regularize_ATE) combined_current(0) = alpha;
     for(int j=0; j<p_mod; ++j) combined_current(offset_beta + j) = beta_map(j);
     for(int k=0; k<p_int; ++k) combined_current(offset_beta_int + k) = beta_int_map(k);
-    if (use_prognostic_shapley) {
-      for(int l=0; l<p_prog; ++l) combined_current(offset_gamma + l) = gamma_map(l);
-    }
+    
     
     // Construct Target Y
     Eigen::VectorXd y_target = residual_map + X_design_map * combined_current;
@@ -249,12 +230,7 @@ writable::list updateLinearTreatmentCpp_cpp(
       D_diag(offset_beta_int + k) = safe_var_linear(V_k_star);
     } 
     // Gamma priors
-    if (use_prognostic_shapley) {
-      for(int l=0; l<p_prog; ++l) {
-        double tau_glob_main = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
-        D_diag(offset_gamma + l) = safe_var_linear(tau_gamma[l] * tau_gamma[l] * tau_glob_main * tau_glob_main);
-      }
-    }
+    
     
     bool use_bhatt_sampler = P_combined >= n;
     Eigen::VectorXd combined_coeffs_new(P_combined);
@@ -264,8 +240,7 @@ writable::list updateLinearTreatmentCpp_cpp(
     if (use_bhatt_sampler) {
       // --- Bhattacharya Sampler ---
       Eigen::MatrixXd D_scaled = D_diag.asDiagonal();
-      D_scaled /= sigma2;
-      Eigen::VectorXd D_scaled_sqrt = D_diag.cwiseSqrt() / sigma;
+      Eigen::VectorXd D_scaled_sqrt = D_diag.cwiseSqrt();
       
       Eigen::VectorXd u(P_combined);
       for(int j=0; j<P_combined; ++j) u(j) = Rf_rnorm(0.0, D_scaled_sqrt(j));
@@ -318,9 +293,7 @@ writable::list updateLinearTreatmentCpp_cpp(
       if(regularize_ATE) alpha = combined_coeffs_new(0);
       for(int j=0; j<p_mod; ++j) beta_map(j) = combined_coeffs_new(offset_beta + j);
       for(int k=0; k<p_int; ++k) beta_int_map(k) = combined_coeffs_new(offset_beta_int + k);
-      if (use_prognostic_shapley) {
-        for(int l=0; l<p_prog; ++l) gamma_map(l) = combined_coeffs_new(offset_gamma + l);
-      }
+      
       residual_map = y_target - X_design_map * combined_coeffs_new;
     }
     
@@ -336,11 +309,7 @@ writable::list updateLinearTreatmentCpp_cpp(
           tau_beta[idx] = std::sqrt(safe_var_linear(rinvgamma_linear(1.0, (1.0/safe_var_linear(nu[idx])) + (beta_int[k]*beta_int[k])/safe_var_linear(2.0*tau_glob*tau_glob*sigma2))));
         }
       }
-      if (use_prognostic_shapley) {
-        for(int l = 0; l < p_prog; l++){
-          tau_gamma[l] = 10.0;
-        }
-      }
+      
     } else if (sample_global_prior != "OLS") {
       for(int j = 0; j < p_mod + regularize_ATE; j++){
         double current_coeff = regularize_ATE ? ((j==0) ? alpha : beta[j-1]) : beta[j];
@@ -354,17 +323,10 @@ writable::list updateLinearTreatmentCpp_cpp(
           tau_beta[idx] = std::sqrt(safe_var_linear(rinvgamma_linear(1.0, (1.0/safe_var_linear(nu[idx])) + (beta_int[k]*beta_int[k])/safe_var_linear(2.0*tau_glob*tau_glob*sigma2))));
         }
       }
-      if (use_prognostic_shapley) {
-        for(int l = 0; l < p_prog; l++){
-          nu_gamma[l] = rinvgamma_linear(1.0, 1.0 + 1.0 / safe_var_linear(tau_gamma[l]*tau_gamma[l]));
-          tau_gamma[l] = std::sqrt(safe_var_linear(rinvgamma_linear(1.0, (1.0 / safe_var_linear(nu_gamma[l])) + (gamma[l] * gamma[l]) / safe_var_linear(2.0 * tau_glob * tau_glob * sigma2))));
-        }
-      }
+      
     } else {
       for(size_t j = 0; j < tau_beta.size(); j++) tau_beta[j] = 10.0;
-      if (use_prognostic_shapley) {
-        for(size_t l = 0; l < tau_gamma.size(); l++) tau_gamma[l] = 10.0;
-      }
+      
       tau_glob = 1.0;
     }
     
@@ -397,12 +359,7 @@ writable::list updateLinearTreatmentCpp_cpp(
           shape_glob += 0.5;
         }
       } 
-      if (use_prognostic_shapley) {
-        for(int l=0; l<p_prog; l++) {
-          sum_scaled += (gamma[l]*gamma[l]) / safe_var_linear(tau_gamma[l]*tau_gamma[l]);
-          shape_glob += 0.5;
-        }
-      }
+      
       double rate_glob = (1.0 / safe_var_linear(xi)) + (1.0 / safe_var_linear(2.0 * sigma2)) * sum_scaled;
       if(rate_glob < 1e-12) rate_glob = 1e-12;
       tau_glob = std::sqrt(safe_var_linear(rinvgamma_linear(shape_glob, rate_glob)));
@@ -412,26 +369,19 @@ writable::list updateLinearTreatmentCpp_cpp(
   }
   
   // Output Packing
-  size_t total_size = 5 + beta.size() + beta_int.size() + gamma.size() + 
-    tau_beta.size() + tau_gamma.size() + 
-    nu.size() + nu_gamma.size();
+  size_t total_size = 5 + beta.size() + beta_int.size() + tau_beta.size() + nu.size();
   
   writable::doubles params_out;
   params_out.reserve(total_size);
   params_out.push_back(alpha);
   params_out.push_back(tau_int);
   params_out.push_back(tau_glob);
-  params_out.push_back(gamma_prop);
   params_out.push_back(xi);
   
   for (double val : beta) params_out.push_back(val);
   for (double val : beta_int) params_out.push_back(val);
-  for (double val : gamma) params_out.push_back(val);
   for (double val : tau_beta) params_out.push_back(val);
-  for (double val : tau_gamma) params_out.push_back(val); 
   for (double val : nu) params_out.push_back(val);
-  for (double val : nu_gamma) params_out.push_back(val); 
-  
   writable::doubles residuals_out;
   residuals_out.reserve(n);
   for (int i = 0; i < n; ++i) residuals_out.push_back(residual_map[i]);
@@ -443,9 +393,10 @@ writable::list updateLinearTreatmentCpp_cpp(
   }
   
   PutRNGstate();
+  
   return writable::list({
     "params"_nm = params_out,
-      "residuals"_nm = residuals_out
+    "residuals"_nm = residuals_out
   });
 }
 
@@ -454,24 +405,19 @@ writable::list updateLinearTreatmentCpp_cpp(
 // -----------------------------------------------------------------------------
 
 [[cpp11::register]]
-writable::doubles updateLinearTreatmentCpp_NCP_cpp(
+writable::list updateLinearTreatmentCpp_NCP_cpp(
     const doubles_matrix<>& X_design,
     const doubles_matrix<>& XtX_design,
     const doubles_matrix<>& X,
-    const doubles_matrix<>& Phi,
     const doubles& Z,
     const doubles& propensity_train,
     writable::doubles residual,
     const cpp11::integers& are_continuous,
     double alpha_tilde,
-    double gamma_prop, 
     writable::doubles beta_tilde,
     writable::doubles beta_int_tilde,
-    writable::doubles gamma_tilde,
     writable::doubles tau_beta,
-    writable::doubles tau_gamma,
     writable::doubles nu,
-    writable::doubles nu_gamma,
     double xi,
     double tau_int,
     double sigma,
@@ -486,13 +432,11 @@ writable::doubles updateLinearTreatmentCpp_NCP_cpp(
     double step_out,
     const std::string& propensity_seperate,
     bool regularize_ATE,
-    double hn_scale,
-    bool use_prognostic_shapley) {
+    double hn_scale) {
   
   GetRNGstate();
   int n = residual.size();
   int p_mod = X.ncol();
-  int p_prog = use_prognostic_shapley ? Phi.ncol() : 0; 
   int p_int = beta_int_tilde.size();
   double sigma2 = sigma * sigma;
   
@@ -513,23 +457,18 @@ writable::doubles updateLinearTreatmentCpp_NCP_cpp(
   Eigen::Map<Eigen::VectorXd> residual_map((double*)residual.data(), n);
   Eigen::Map<const Eigen::VectorXd> Z_map((const double*)Z.data(), n);
   Eigen::Map<const Eigen::MatrixXd> X_map((const double*)X.data(), n, p_mod);
-  Eigen::Map<const Eigen::MatrixXd> Phi_map((const double*)Phi.data(), n, (p_prog > 0 ? p_prog : 1));
-  
+    
   Eigen::Map<Eigen::VectorXd> beta_tilde_map((double*)beta_tilde.data(), p_mod);
   Eigen::Map<Eigen::VectorXd> beta_int_tilde_map((double*)beta_int_tilde.data(), p_int);
-  Eigen::Map<Eigen::VectorXd> gamma_tilde_map((double*)gamma_tilde.data(), (p_prog > 0 ? p_prog : 1));
-  
+    
   // --- Calculate Real Betas ---
   Eigen::VectorXd beta_current(p_mod);
   Eigen::VectorXd beta_int_current(p_int);
-  Eigen::VectorXd gamma_current(p_prog > 0 ? p_prog : 1);
-  double alpha_current = alpha_tilde;
+    double alpha_current = alpha_tilde;
   
   int offset_alpha = regularize_ATE ? 1 : 0;
   int offset_beta = offset_alpha;
   int offset_beta_int = offset_beta + p_mod;
-  int offset_gamma = offset_beta_int + p_int;
-  
   double tau_glob_main_pred = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
   if(regularize_ATE) alpha_current = alpha_tilde * tau_beta[0] * tau_glob_main_pred;
   for (int j = 0; j < p_mod; ++j) beta_current(j) = beta_tilde_map(j) * tau_beta[j + offset_beta] * tau_glob_main_pred;
@@ -538,17 +477,9 @@ writable::doubles updateLinearTreatmentCpp_NCP_cpp(
     beta_int_current(k) = beta_int_tilde_map(k) * V_k * tau_glob;
   }
   
-  if (use_prognostic_shapley) {
-    for(int l = 0; l < p_prog; ++l) gamma_current(l) = gamma_tilde_map(l) * tau_gamma[l] * tau_glob_main_pred;
-  }
   
-  // --- Propensity ---
-  if (propensity_seperate == "mu") {
-    Eigen::Map<const Eigen::VectorXd> prop_map((const double*)propensity_train.data(), n);
-    residual_map += prop_map * gamma_prop;
-    gamma_prop = sample_alpha_linear(residual, propensity_train, sigma, 10.0);
-    residual_map -= prop_map * gamma_prop;
-  }
+  
+  // --- ALPHA UPDATES (VECTORIZED) ---
   if (!regularize_ATE){
     residual_map += Z_map * alpha_current;
     alpha_tilde = sample_alpha_linear(residual, Z, sigma, alpha_prior_sd);
@@ -558,7 +489,7 @@ writable::doubles updateLinearTreatmentCpp_NCP_cpp(
   
   // --- Joint Gibbs ---
   if (gibbs) {
-    int P_combined = offset_gamma + p_prog;
+    int P_combined = offset_beta_int + p_int;
     
     // Target y*
     Eigen::VectorXd y_target = residual_map;
@@ -566,22 +497,18 @@ writable::doubles updateLinearTreatmentCpp_NCP_cpp(
     for (int j = 0; j < p_mod; ++j) y_target.array() += Z_map.array() * X_map.col(j).array() * beta_current(j);
     for (size_t k = 0; k < int_pairs.size(); ++k) y_target.array() += Z_map.array() * X_map.col(int_pairs[k].first).array() * X_map.col(int_pairs[k].second).array() * beta_int_current(k);
     
-    if (use_prognostic_shapley) {
-      for (int l = 0; l < p_prog; ++l) y_target.array() += Phi_map.col(l).array() * gamma_current(l);
-    }
+    
     
     // X_star (NCP Design Matrix)
     Eigen::MatrixXd X_star(n, P_combined);
-    if(regularize_ATE) X_star.col(0) = Z_map.array() * tau_beta[0] * tau_glob;
-    for (int j = 0; j < p_mod; ++j) X_star.col(offset_beta + j) = Z_map.array() * X_map.col(j).array() * tau_beta[j + offset_beta] * tau_glob;
+    if(regularize_ATE) X_star.col(0) = Z_map.array() * tau_beta[0] * tau_glob_main_pred;
+    for (int j = 0; j < p_mod; ++j) X_star.col(offset_beta + j) = Z_map.array() * X_map.col(j).array() * tau_beta[j + offset_beta] * tau_glob_main_pred;
     for (size_t k = 0; k < int_pairs.size(); ++k) {
       double V_k = unlink ? tau_beta[offset_beta_int + k] : (std::sqrt(tau_int) * tau_beta[offset_beta + int_pairs[k].first] * tau_beta[offset_beta + int_pairs[k].second]);
       X_star.col(offset_beta_int + k) = Z_map.array() * X_map.col(int_pairs[k].first).array() * X_map.col(int_pairs[k].second).array() * V_k * tau_glob;
     }
     
-    if (use_prognostic_shapley) {
-      for (int l = 0; l < p_prog; ++l) X_star.col(offset_gamma + l) = Phi_map.col(l).array() * tau_gamma[l] * tau_glob;
-    }
+    
     
     Eigen::MatrixXd XtX = X_star.transpose() * X_star;
     Eigen::VectorXd Xty = X_star.transpose() * y_target;
@@ -591,6 +518,10 @@ writable::doubles updateLinearTreatmentCpp_NCP_cpp(
     Prec.diagonal().array() += 1.0;
     
     Eigen::LLT<Eigen::MatrixXd> llt(Prec);
+    if(llt.info() != Eigen::Success) {
+      Prec.diagonal().array() += 1e-6;
+      llt.compute(Prec);
+    }
     Eigen::VectorXd combined_tilde_new(P_combined);
     
     if(llt.info() == Eigen::Success) {
@@ -607,9 +538,7 @@ writable::doubles updateLinearTreatmentCpp_NCP_cpp(
     for(int j=0; j<p_mod; ++j) beta_tilde[j] = combined_tilde_new(offset_beta + j);
     for(int k=0; k<p_int; ++k) beta_int_tilde[k] = combined_tilde_new(offset_beta_int + k);
     
-    if (use_prognostic_shapley) {
-      for(int l=0; l<p_prog; ++l) gamma_tilde[l] = combined_tilde_new(offset_gamma + l);
-    }
+    
     
     // Update Real
     double tau_glob_main = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
@@ -619,18 +548,14 @@ writable::doubles updateLinearTreatmentCpp_NCP_cpp(
       double V_k = unlink ? tau_beta[offset_beta_int + k] : (std::sqrt(tau_int) * tau_beta[offset_beta + int_pairs[k].first] * tau_beta[offset_beta + int_pairs[k].second]);
       beta_int_current(k) = beta_int_tilde_map(k) * V_k * tau_glob;
     }
-    if (use_prognostic_shapley) {
-      for (int l = 0; l < p_prog; ++l) gamma_current(l) = gamma_tilde_map(l) * tau_gamma[l] * tau_glob_main;
-    }
+    
     
     // Residual Update
     Eigen::VectorXd new_fit = Eigen::VectorXd::Zero(n);
     if(regularize_ATE) new_fit.array() += Z_map.array() * alpha_current;
     for (int j = 0; j < p_mod; ++j) new_fit.array() += Z_map.array() * X_map.col(j).array() * beta_current(j);
     for (size_t k = 0; k < int_pairs.size(); ++k) new_fit.array() += Z_map.array() * X_map.col(int_pairs[k].first).array() * X_map.col(int_pairs[k].second).array() * beta_int_current(k);
-    // if (use_prognostic_shapley) {
-    //   for (int l = 0; l < p_prog; ++l) new_fit.array() += Phi_map.col(l).array() * gamma_current(l);
-    // }
+    // 
     residual_map = y_target - new_fit;
     
     // Shrinkage
@@ -645,12 +570,7 @@ writable::doubles updateLinearTreatmentCpp_NCP_cpp(
           tau_beta[full_idx] = std::sqrt(safe_var_linear(rinvgamma_linear(1.0, (1.0 / safe_var_linear(nu[full_idx])) + (beta_int_tilde[k] * beta_int_tilde[k]) / safe_var_linear(2.0 * tau_glob * tau_glob))));
         }
       }
-      if (use_prognostic_shapley) {
-        for(int l=0; l<p_prog; ++l) {
-          nu_gamma[l] = rinvgamma_linear(1.0, 1.0 + 1.0/safe_var_linear(tau_gamma[l]*tau_gamma[l]));
-          tau_gamma[l] = std::sqrt(safe_var_linear(rinvgamma_linear(1.0, (1.0/safe_var_linear(nu_gamma[l])) + (gamma_tilde[l]*gamma_tilde[l])/safe_var_linear(2.0*tau_glob*tau_glob))));
-        }
-      }
+      
     } else if (sample_global_prior != "OLS") {
       for(int j=0; j<p_mod+regularize_ATE; ++j) {
         double coef = regularize_ATE ? ((j==0)?alpha_tilde:beta_tilde[j-1]) : beta_tilde[j];
@@ -664,17 +584,10 @@ writable::doubles updateLinearTreatmentCpp_NCP_cpp(
           tau_beta[full_idx] = std::sqrt(safe_var_linear(rinvgamma_linear(1.0, (1.0 / safe_var_linear(nu[full_idx])) + (beta_int_tilde[k] * beta_int_tilde[k]) / safe_var_linear(2.0 * tau_glob * tau_glob))));
         }
       }
-      if (use_prognostic_shapley) {
-        for(int l=0; l<p_prog; ++l) {
-          nu_gamma[l] = rinvgamma_linear(1.0, 1.0 + 1.0/safe_var_linear(tau_gamma[l]*tau_gamma[l]));
-          tau_gamma[l] = std::sqrt(safe_var_linear(rinvgamma_linear(1.0, (1.0/safe_var_linear(nu_gamma[l])) + (gamma_tilde[l]*gamma_tilde[l])/safe_var_linear(2.0*tau_glob*tau_glob))));
-        }
-      }
+      
     } else {
       for(size_t j = 0; j < tau_beta.size(); j++) tau_beta[j] = 10.0;
-      if (use_prognostic_shapley) {
-        for(size_t l = 0; l < tau_gamma.size(); l++) tau_gamma[l] = 10.0;
-      }
+      
       tau_glob = 1.0;
     }
     
@@ -707,12 +620,7 @@ writable::doubles updateLinearTreatmentCpp_NCP_cpp(
         }
       } 
       
-      if (use_prognostic_shapley) {
-        for(int l=0; l<p_prog; ++l) {
-          sum_scaled += (gamma_tilde[l]*gamma_tilde[l]) / safe_var_linear(tau_gamma[l]*tau_gamma[l]);
-          shape += 0.5;
-        }
-      }
+      
       
       double rate = (1.0/safe_var_linear(xi)) + (1.0/2.0) * sum_scaled;
       tau_glob = std::sqrt(safe_var_linear(rinvgamma_linear(shape, rate)));
@@ -722,28 +630,38 @@ writable::doubles updateLinearTreatmentCpp_NCP_cpp(
   }
   
   // Return
-  size_t total_size = 5 + beta_tilde.size() + beta_int_tilde.size() + gamma_tilde.size() + 
-    tau_beta.size() + tau_gamma.size() + 
-    nu.size() + nu_gamma.size() + residual.size();
+  size_t total_size = 5 + beta_tilde.size() + beta_int_tilde.size() + tau_beta.size() + nu.size();
   
-  writable::doubles output;
-  output.reserve(total_size);
-  output.push_back(alpha_tilde);
-  output.push_back(tau_int);
-  output.push_back(tau_glob);
-  output.push_back(gamma_prop);
-  output.push_back(xi);
+    writable::doubles params_out;
+  params_out.reserve(total_size);
+  params_out.push_back(alpha_tilde);
+  params_out.push_back(tau_int);
+  params_out.push_back(tau_glob);
+  params_out.push_back(xi);
   PutRNGstate();
-  for (double val : beta_tilde) output.push_back(val);
-  for (double val : beta_int_tilde) output.push_back(val);
-  for (double val : gamma_tilde) output.push_back(val);
-  for (double val : tau_beta) output.push_back(val);
-  for (double val : tau_gamma) output.push_back(val);
-  for (double val : nu) output.push_back(val);
-  for (double val : nu_gamma) output.push_back(val);
-  for (int i = 0; i < n; ++i) output.push_back(residual_map[i]);
+  for (double val : beta_tilde) params_out.push_back(val);
+  for (double val : beta_int_tilde) params_out.push_back(val);
+  for (double val : tau_beta) params_out.push_back(val);
+  for (double val : nu) params_out.push_back(val);
   
-  return output;
+  writable::doubles residuals_out;
+  residuals_out.reserve(n);
+  for (int i = 0; i < n; ++i) residuals_out.push_back(residual_map[i]);
+  
+  writable::doubles real_params_out;
+  real_params_out.reserve(4 + p_mod + p_int);
+  real_params_out.push_back(alpha_current);
+  real_params_out.push_back(tau_int);
+  real_params_out.push_back(tau_glob);
+  real_params_out.push_back(xi);
+  for (int j = 0; j < p_mod; ++j) real_params_out.push_back(beta_current(j));
+  for (int k = 0; k < p_int; ++k) real_params_out.push_back(beta_int_current(k));
+  
+  return writable::list({
+    "params"_nm = params_out,
+    "real_params"_nm = real_params_out,
+    "residuals"_nm = residuals_out
+  });
 }
 
 // -----------------------------------------------------------------------------
@@ -888,6 +806,10 @@ writable::list run_ltr_mse_cpp(
         }
         
         Eigen::LLT<Eigen::MatrixXd> llt(Prec);
+    if(llt.info() != Eigen::Success) {
+      Prec.diagonal().array() += 1e-6;
+      llt.compute(Prec);
+    }
         if (llt.info() != Eigen::Success) {
             Prec.diagonal().array() += 1e-6;
             llt.compute(Prec);
@@ -1127,6 +1049,10 @@ writable::list run_ltr_pg_cpp(
         }
         
         Eigen::LLT<Eigen::MatrixXd> llt(Prec);
+    if(llt.info() != Eigen::Success) {
+      Prec.diagonal().array() += 1e-6;
+      llt.compute(Prec);
+    }
         if (llt.info() != Eigen::Success) {
             Prec.diagonal().array() += 1e-6;
             llt.compute(Prec);

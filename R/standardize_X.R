@@ -13,6 +13,7 @@
 #'  \item `"continuous"` (Default): Allows interactions where at least one variable is continuous.
 #'  \item `"continuous_or_binary"`: Allows interactions where at least one variable is continuous OR binary.
 #'  \item `"all"`: Allows all possible two-way interactions between valid columns.
+#'  \item `"none"`: No interactions are allowed.
 #'}
 #' @param cat_coding_method A character string for categorical variable contrast coding.
 #' Must be one of `"sum"` (for sum-to-zero/deviation coding) or `"difference"` (for successive differences).

@@ -114,9 +114,9 @@ bcf_linear_probit_amr <- function(X_train, Z_train, y_train, propensity_train = 
   
   # Data handling
   if(is.character(sample_global_prior)){
-    sample_global_prior <- match.arg(sample_global_prior, c("half-cauchy", "half-normal", "none", "OLS"))
+    sample_global_prior <- match.arg(sample_global_prior, c("half-cauchy", "half-normal", "none", "OLS", "hybrid"))
   } else {
-    stop("sample_global_prior must be a string: 'half-cauchy', 'half-normal', 'none', or 'OLS'")
+    stop("sample_global_prior must be a string: 'half-cauchy', 'half-normal', 'none', 'OLS', or 'hybrid'")
   }
   if(general_params_updated$verbose){
     print("Pre-Processing data!")
@@ -996,6 +996,33 @@ bcf_linear_probit_amr <- function(X_train, Z_train, y_train, propensity_train = 
   
   
   # Run GFR (warm start) if specified
+  # Precompute design matrices helper
+  X_main_for_design <- if (propensity_seperate == "tau") X_train else X_train_raw
+  X_main_with_int <- X_main_for_design
+  if (p_int > 0) {
+    X_int <- matrix(nrow = n, ncol = p_int)
+    for (k in 1:p_int) {
+      X_int[, k] <- X_main_for_design[, int_pairs_matrix[1, k]] * X_main_for_design[, int_pairs_matrix[2, k]]
+    }
+    X_main_with_int <- cbind(X_main_with_int, X_int)
+  }
+
+  compute_design_matrices <- function(Z_lin) {
+    if (regularize_ATE) {
+      Xd <- cbind(as.vector(Z_lin), as.vector(Z_lin) * X_main_with_int)
+    } else {
+      Xd <- as.vector(Z_lin) * X_main_with_int
+    }
+    XtXd <- crossprod(Xd)
+    return(list(X_design = Xd, XtX_design = XtXd))
+  }
+
+  # Precompute baseline design matrices
+  Z_linear <- Z_train
+  design_mats <- compute_design_matrices(Z_linear)
+  X_design <- design_mats$X_design
+  XtX_design <- design_mats$XtX_design
+
   if (num_gfr > 0){
     for (i in 1:num_gfr) {
       # Keep all GFR samples at this stage -- remove from ForestSamples after MCMC
@@ -1054,8 +1081,9 @@ bcf_linear_probit_amr <- function(X_train, Z_train, y_train, propensity_train = 
       # Sample the treatment forest
       if(adaptive_coding){
         Z_linear <- tau_basis_train
-      } else {
-        Z_linear <- Z_train
+        design_mats <- compute_design_matrices(Z_linear)
+        X_design <- design_mats$X_design
+        XtX_design <- design_mats$XtX_design
       }
       if(simple_prior){
         sigma2_lin <- 1
@@ -1072,6 +1100,8 @@ bcf_linear_probit_amr <- function(X_train, Z_train, y_train, propensity_train = 
       # Prepare parameters for C++ call
       if(use_ncp == TRUE){
         update_results <- updateLinearTreatmentCpp_NCP_cpp_old(
+          X_design = X_design,
+          XtX_design = XtX_design,
           X = if (propensity_seperate == "tau") X_train else X_train_raw,
           Z = Z_linear,
           propensity_train = propensity_train, 
@@ -1085,7 +1115,7 @@ bcf_linear_probit_amr <- function(X_train, Z_train, y_train, propensity_train = 
           nu = nu,
           xi = xi,
           tau_int = 1.0,
-          sigma = sigma2_lin,
+          sigma = sqrt(sigma2_lin),
           alpha_prior_sd = 10.0,
           tau_glob = tau_glob,
           sample_global_prior = sample_global_prior,
@@ -1095,6 +1125,8 @@ bcf_linear_probit_amr <- function(X_train, Z_train, y_train, propensity_train = 
           hn_scale = hn_scale)
       } else {
         update_results <- updateLinearTreatmentCpp_cpp_old(
+          X_design = X_design,
+          XtX_design = XtX_design,
           X = if (propensity_seperate == "tau") X_train else X_train_raw,
           Z = Z_linear,
           propensity_train = propensity_train,
@@ -1108,7 +1140,7 @@ bcf_linear_probit_amr <- function(X_train, Z_train, y_train, propensity_train = 
           nu = nu,
           xi = xi,
           tau_int = tau_int,
-          sigma = sigma2_lin,
+          sigma = sqrt(sigma2_lin),
           alpha_prior_sd = 10.0,
           tau_glob = tau_glob,
           sample_global_prior = sample_global_prior,
@@ -1401,8 +1433,9 @@ bcf_linear_probit_amr <- function(X_train, Z_train, y_train, propensity_train = 
         
         if(adaptive_coding){
           Z_linear <- tau_basis_train
-        } else {
-          Z_linear <- Z_train
+          design_mats <- compute_design_matrices(Z_linear)
+          X_design <- design_mats$X_design
+          XtX_design <- design_mats$XtX_design
         }
         
         if (probit_outcome_model) {
@@ -1467,7 +1500,7 @@ bcf_linear_probit_amr <- function(X_train, Z_train, y_train, propensity_train = 
         h_cov <- (Z_train - pi_hat) / (pi_hat * (1 - pi_hat))
         
         df_weights <- 5
-        B_spline <- splines::bs(Y_star, df = df_weights)
+        B_spline <- splines::bs(Y_star, df = df_weights, intercept = TRUE)
         var_h <- max(var(h_cov), 1e-6)
         prior_prec <- diag(df_weights) / 100
         prec_matrix <- crossprod(B_spline) / var_h + prior_prec
@@ -1483,6 +1516,8 @@ bcf_linear_probit_amr <- function(X_train, Z_train, y_train, propensity_train = 
         for(v in 1:n_tijn){
           if(use_ncp){
             update_results <- updateLinearTreatmentCpp_NCP_amr(
+              X_design = X_design,
+              XtX_design = XtX_design,
               X = if (propensity_seperate == "tau") X_train else X_train_raw,
               Z = Z_linear,
               propensity_train = propensity_train, 
@@ -1508,11 +1543,13 @@ bcf_linear_probit_amr <- function(X_train, Z_train, y_train, propensity_train = 
             
           } else {
             update_results <- updateLinearTreatmentCpp_amr(
+              obs_weights = obs_weights,
+              X_design = X_design,
+              XtX_design = XtX_design,
               X = if (propensity_seperate == "tau") X_train else X_train_raw,
               Z = Z_linear,
               propensity_train = propensity_train,
               residual = tau_residual,
-              obs_weights = obs_weights,
               are_continuous = as.vector(as.integer(boolean_continuous*1)),
               alpha = alpha,
               gamma = gamma,
