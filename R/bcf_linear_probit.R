@@ -750,6 +750,16 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
       if (include_variance_forest) variable_weights_variance <- c(variable_weights_variance, rep(0, ncol(propensity_train)))
     }
     if (has_test) X_test <- cbind(X_test, propensity_test)
+    if (propensity_seperate == "tau") {
+      num_x_cols <- ncol(X_train_raw)
+      cols_before <- 1:(1 + num_x_cols)
+      if (ncol(full_design_matrix_train) > 1 + num_x_cols) {
+        cols_after <- (2 + num_x_cols):ncol(full_design_matrix_train)
+        full_design_matrix_train <- cbind(full_design_matrix_train[, cols_before, drop=FALSE], propensity_train, full_design_matrix_train[, cols_after, drop=FALSE])
+      } else {
+        full_design_matrix_train <- cbind(full_design_matrix_train, propensity_train)
+      }
+    }
   }
   
   # Renormalize variable weights
@@ -1267,13 +1277,13 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
       residual <- update_results$residuals
       
       # Extract scalars from params_vec (Fixed order from C++)
-      # 1: alpha, 2: tau_int, 3: tau_glob, 4: unused, 5: xi
+      # 1: alpha, 2: tau_int, 3: tau_glob, 4: xi
       alpha <- params_vec[1]
       tau_int <- params_vec[2]
       tau_glob <- params_vec[3]
-      xi <- params_vec[5]
+      xi <- params_vec[4]
       
-      beta_start <- 6
+      beta_start <- 5
       beta_end <- beta_start + p_mod - 1
       beta <- params_vec[beta_start:beta_end]
       
@@ -1302,9 +1312,9 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
       if (use_ncp) {
         real_params_vec <- update_results$real_params
         alpha_real <- real_params_vec[1]
-        beta_real <- real_params_vec[6:(5 + p_mod)]
+        beta_real <- real_params_vec[5:(4 + p_mod)]
         if(p_int > 0) {
-          beta_int_real <- real_params_vec[(6 + p_mod):(5 + p_mod + p_int)]
+          beta_int_real <- real_params_vec[(5 + p_mod):(4 + p_mod + p_int)]
         } else {
           beta_int_real <- numeric(0)
         }
@@ -1752,13 +1762,13 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           params_vec <- update_results$params
           residual <- update_results$residuals
           
-          # 1: alpha, 2: tau_int, 3: tau_glob, 4: unused, 5: xi
+          # 1: alpha, 2: tau_int, 3: tau_glob, 4: xi
           alpha <- params_vec[1]
           tau_int <- params_vec[2]
           tau_glob <- params_vec[3]
-          xi <- params_vec[5]
+          xi <- params_vec[4]
           
-          beta_start <- 6
+          beta_start <- 5
           beta_end <- beta_start + p_mod - 1
           beta <- params_vec[beta_start:beta_end]
           
@@ -1792,9 +1802,9 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
         if (use_ncp) {
           real_params_vec <- update_results$real_params
           alpha_real <- real_params_vec[1]
-          beta_real <- real_params_vec[6:(5 + p_mod)]
+          beta_real <- real_params_vec[5:(4 + p_mod)]
           if(p_int > 0) {
-            beta_int_real <- real_params_vec[(6 + p_mod):(5 + p_mod + p_int)]
+            beta_int_real <- real_params_vec[(5 + p_mod):(4 + p_mod + p_int)]
           } else {
             beta_int_real <- numeric(0)
           }
