@@ -9,7 +9,7 @@
 [submodule "deps/boost_math"]
 	path = deps/boost_math
 	url = https://github.com/boostorg/math
-	branch = develop
+	branch = boost-1.83.0
 [submodule "deps/eigen"]
 	path = deps/eigen
 	url = https://gitlab.com/libeigen/eigen
