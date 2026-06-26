@@ -5,7 +5,7 @@
 [submodule "deps/fmt"]
 	path = deps/fmt
 	url = https://github.com/fmtlib/fmt/
-	branch = master
+	branch = main
 [submodule "deps/boost_math"]
 	path = deps/boost_math
 	url = https://github.com/boostorg/math
