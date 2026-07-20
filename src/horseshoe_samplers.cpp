@@ -298,9 +298,9 @@ writable::list updateLinearTreatmentCpp_cpp(
     }
     
     // Shrinkage Updates
-    if (sample_global_prior == "hybrid") {
+    if (sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") {
       for(int j = 0; j < p_mod + regularize_ATE; j++){
-        tau_beta[j] = 10.0;
+        tau_beta[j] = (sample_global_prior == "hybrid") ? 10.0 : 1.0;
       }
       if(unlink){
         for(size_t k=0; k<int_pairs.size(); k++) {
@@ -331,7 +331,7 @@ writable::list updateLinearTreatmentCpp_cpp(
     }
     
     // Global Tau
-    if (sample_global_prior == "half-cauchy" || sample_global_prior == "hybrid") {
+    if (sample_global_prior == "half-cauchy" || sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") {
       xi = rinvgamma_linear(1.0, 1.0 + 1.0 / safe_var_linear(tau_glob*tau_glob));
       double sum_scaled = 0.0;
       double shape_glob = 1.0 / 2.0;
@@ -559,21 +559,21 @@ writable::list updateLinearTreatmentCpp_NCP_cpp(
     residual_map = y_target - new_fit;
     
     // Shrinkage
-    if (sample_global_prior == "hybrid") {
+    if (sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") {
       for(int j=0; j<p_mod+regularize_ATE; ++j) {
-        tau_beta[j] = 10.0;
+        tau_beta[j] = (sample_global_prior == "hybrid") ? 10.0 : 1.0;
       }
       if(unlink){
         for(size_t k=0; k<int_pairs.size(); k++){
           int full_idx = offset_beta_int + k;
           nu[full_idx] = rinvgamma_linear(1.0, 1.0 + 1.0 / safe_var_linear(tau_beta[full_idx]*tau_beta[full_idx]));
-          tau_beta[full_idx] = std::sqrt(safe_var_linear(rinvgamma_linear(1.0, (1.0 / safe_var_linear(nu[full_idx])) + (beta_int_tilde[k] * beta_int_tilde[k]) / safe_var_linear(2.0 * tau_glob * tau_glob))));
+          tau_beta[full_idx] = std::sqrt(safe_var_linear(rinvgamma_linear(1.0, (1.0 / safe_var_linear(nu[full_idx])) + (beta_int_current(k) * beta_int_current(k)) / safe_var_linear(2.0 * tau_glob * tau_glob))));
         }
       }
       
     } else if (sample_global_prior != "OLS") {
       for(int j=0; j<p_mod+regularize_ATE; ++j) {
-        double coef = regularize_ATE ? ((j==0)?alpha_tilde:beta_tilde[j-1]) : beta_tilde[j];
+        double coef = regularize_ATE ? ((j==0)?alpha_current:beta_current(j-1)) : beta_current(j);
         nu[j] = rinvgamma_linear(1.0, 1.0 + 1.0/safe_var_linear(tau_beta[j]*tau_beta[j]));
         tau_beta[j] = std::sqrt(safe_var_linear(rinvgamma_linear(1.0, (1.0/safe_var_linear(nu[j])) + (coef*coef)/safe_var_linear(2.0*tau_glob*tau_glob))));
       }
@@ -581,7 +581,7 @@ writable::list updateLinearTreatmentCpp_NCP_cpp(
         for(size_t k=0; k<int_pairs.size(); k++){
           int full_idx = offset_beta_int + k;
           nu[full_idx] = rinvgamma_linear(1.0, 1.0 + 1.0 / safe_var_linear(tau_beta[full_idx]*tau_beta[full_idx]));
-          tau_beta[full_idx] = std::sqrt(safe_var_linear(rinvgamma_linear(1.0, (1.0 / safe_var_linear(nu[full_idx])) + (beta_int_tilde[k] * beta_int_tilde[k]) / safe_var_linear(2.0 * tau_glob * tau_glob))));
+          tau_beta[full_idx] = std::sqrt(safe_var_linear(rinvgamma_linear(1.0, (1.0 / safe_var_linear(nu[full_idx])) + (beta_int_current(k) * beta_int_current(k)) / safe_var_linear(2.0 * tau_glob * tau_glob))));
         }
       }
       
@@ -591,31 +591,31 @@ writable::list updateLinearTreatmentCpp_NCP_cpp(
       tau_glob = 1.0;
     }
     
-    if (sample_global_prior == "half-cauchy" || sample_global_prior == "hybrid") {
+    if (sample_global_prior == "half-cauchy" || sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") {
       xi = rinvgamma_linear(1.0, 1.0 + 1.0 / safe_var_linear(tau_glob*tau_glob));
       double sum_scaled = 0.0;
       double shape = 1.0 / 2.0;
       
       if (sample_global_prior != "hybrid") {
         if(regularize_ATE){
-          sum_scaled += (alpha_tilde*alpha_tilde) / safe_var_linear(tau_beta[0]*tau_beta[0]);
+          sum_scaled += (alpha_current*alpha_current) / safe_var_linear(tau_beta[0]*tau_beta[0]);
           shape += 0.5;
         }
         for(int j=0; j<p_mod; ++j) {
-          sum_scaled += (beta_tilde[j]*beta_tilde[j]) / safe_var_linear(tau_beta[j+offset_beta]*tau_beta[j+offset_beta]);
+          sum_scaled += (beta_current(j)*beta_current(j)) / safe_var_linear(tau_beta[j+offset_beta]*tau_beta[j+offset_beta]);
           shape += 0.5;
         }
       }
       
       if(unlink){
         for(int k = 0; k < p_int; k++) {
-          sum_scaled += (beta_int_tilde[k] * beta_int_tilde[k]) / safe_var_linear(tau_beta[offset_beta_int + k] * tau_beta[offset_beta_int + k]);
+          sum_scaled += (beta_int_current(k) * beta_int_current(k)) / safe_var_linear(tau_beta[offset_beta_int + k] * tau_beta[offset_beta_int + k]);
           shape += 0.5;
         } 
       } else if (sample_global_prior != "hybrid") {
         for(size_t k = 0; k < int_pairs.size(); ++k) {
           double var_k = tau_int * tau_beta[offset_beta + int_pairs[k].first] * tau_beta[offset_beta + int_pairs[k].second];
-          sum_scaled += (beta_int_tilde[k] * beta_int_tilde[k]) / safe_var_linear(var_k);
+          sum_scaled += (beta_int_current(k) * beta_int_current(k)) / safe_var_linear(var_k);
           shape += 0.5;
         }
       } 

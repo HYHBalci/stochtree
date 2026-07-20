@@ -126,9 +126,15 @@ standardize_X_by_index <- function(X_initial,
       X_intermediate_df[cols_to_scale] <- lapply(X_intermediate_df[cols_to_scale], function(col) as.vector(scale(col)))
     }
     
-    X_final <- model.matrix(~ . - 1, data = X_intermediate_df)
+    # Let model.matrix generate the intercept (~ .)
+    X_final_with_int <- model.matrix(~ ., data = X_intermediate_df)
     
-    attr_assign <- attr(X_final, "assign")
+    # Manually drop the first column, which is "(Intercept)"
+    X_final <- X_final_with_int[, -1, drop = FALSE]
+    
+    # Get the "assign" attributes and drop the first element
+    attr_assign <- attr(X_final_with_int, "assign")[-1]
+    
     matched_rows <- match(colnames(X_intermediate_df)[attr_assign], intermediate_map$col_name_intermediate)
     
     X_final_var_info <- data.frame(
@@ -196,6 +202,7 @@ standardize_X_by_index <- function(X_initial,
       "continuous" = X_final_var_info$is_continuous,
       "none" = rep(FALSE, n_final_cols)
     )
+    is_candidate[is.na(is_candidate)] <- FALSE
     
     # Count pairs where at least one variable is a candidate
     for (i in 1:(n_final_cols - 1)) {

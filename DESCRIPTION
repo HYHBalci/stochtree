@@ -56,7 +56,8 @@ Imports:
     forcats,
     ggplot2,
     rlang,
-    purrr
+    purrr,
+    scales
 URL: https://stochtree.ai/, https://github.com/StochasticTree/stochtree
 BugReports: https://github.com/StochasticTree/stochtree/issues
 Config/testthat/edition: 3

@@ -156,7 +156,7 @@ ranking_bcf <- function(X_train, Z_train, y_train, propensity_train = NULL, kl_d
         sample_sigma2_global = TRUE, sigma2_global_init = NULL, 
         sigma2_global_shape = 0, sigma2_global_scale = 0, 
         variable_weights = NULL, propensity_covariate = "mu", 
-        adaptive_coding = TRUE, control_coding_init = -0.5, 
+        adaptive_coding = FALSE, control_coding_init = -0.5, 
         treated_coding_init = 0.5, rfx_prior_var = NULL, 
         random_seed = -1, keep_burnin = FALSE, keep_gfr = FALSE, 
         keep_every = 1, num_chains = 1, verbose = FALSE, 
@@ -866,6 +866,18 @@ ranking_bcf <- function(X_train, Z_train, y_train, propensity_train = NULL, kl_d
     
     # Random number generator (std::mt19937)
     if (is.null(random_seed) || random_seed == -1) random_seed = sample(1:1000000,1,FALSE)
+    # Set a function-scoped RNG if user provided a random seed
+    custom_rng <- random_seed >= 0
+    has_existing_random_seed <- F
+    if (custom_rng) {
+        # Cache original global environment RNG state (if it exists)
+        if (exists(".Random.seed", envir = .GlobalEnv)) {
+            original_global_seed <- .Random.seed
+            has_existing_random_seed <- T
+        }
+        # Set new seed and store associated RNG state
+        set.seed(random_seed)
+    }
     rng <- createCppRNG(random_seed)
     
     # Sampling data structures
@@ -1507,6 +1519,14 @@ ranking_bcf <- function(X_train, Z_train, y_train, propensity_train = NULL, kl_d
     }
     class(result) <- "ranking_bcfmodel"
     
+    # Restore global RNG state if user provided a random seed
+    if (custom_rng) {
+        if (has_existing_random_seed) {
+            .Random.seed <- original_global_seed
+        } else {
+            rm(".Random.seed", envir = .GlobalEnv)
+        }
+    }
     return(result)
 }
 

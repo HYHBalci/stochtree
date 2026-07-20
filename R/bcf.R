@@ -155,7 +155,7 @@ bcf <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_group_id
         sample_sigma2_global = TRUE, sigma2_global_init = NULL, 
         sigma2_global_shape = 0, sigma2_global_scale = 0, 
         variable_weights = NULL, propensity_covariate = "mu", 
-        adaptive_coding = TRUE, control_coding_init = -0.5, 
+        adaptive_coding = FALSE, control_coding_init = -0.5, 
         treated_coding_init = 0.5, rfx_prior_var = NULL, 
         random_seed = -1, keep_burnin = FALSE, keep_gfr = FALSE, 
         keep_every = 1, num_chains = 1, verbose = FALSE, 
@@ -859,6 +859,18 @@ bcf <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_group_id
     
     # Random number generator (std::mt19937)
     if (is.null(random_seed) || random_seed == -1) random_seed = sample(1:1000000,1,FALSE)
+    # Set a function-scoped RNG if user provided a random seed
+    custom_rng <- random_seed >= 0
+    has_existing_random_seed <- F
+    if (custom_rng) {
+        # Cache original global environment RNG state (if it exists)
+        if (exists(".Random.seed", envir = .GlobalEnv)) {
+            original_global_seed <- .Random.seed
+            has_existing_random_seed <- T
+        }
+        # Set new seed and store associated RNG state
+        set.seed(random_seed)
+    }
     rng <- createCppRNG(random_seed)
     
     # Sampling data structures
@@ -927,15 +939,16 @@ bcf <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_group_id
                 mu_forest_pred <- active_forest_mu$predict(forest_dataset_train)
                 tau_forest_pred <- active_forest_tau$predict(forest_dataset_train)
                 forest_pred <- mu_forest_pred + tau_forest_pred
-                mu0 <- forest_pred[y_train == 0]
-                mu1 <- forest_pred[y_train == 1]
+                eta_pred <- forest_pred + y_bar_train
+                mu0 <- eta_pred[y_train == 0]
+                mu1 <- eta_pred[y_train == 1]
                 u0 <- runif(sum(y_train == 0), 0, pnorm(0 - mu0))
                 u1 <- runif(sum(y_train == 1), pnorm(0 - mu1), 1)
                 resid_train[y_train==0] <- mu0 + qnorm(u0)
                 resid_train[y_train==1] <- mu1 + qnorm(u1)
                 
                 # Update outcome
-                outcome_train$update_data(resid_train - forest_pred)
+                outcome_train$update_data(resid_train - y_bar_train - forest_pred)
             }
             
             # Sample the prognostic forest
@@ -969,7 +982,8 @@ bcf <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_group_id
                 # Estimate mu(X) and tau(X) and compute y - mu(X)
                 mu_x_raw_train <- active_forest_mu$predict_raw(forest_dataset_train)
                 tau_x_raw_train <- active_forest_tau$predict_raw(forest_dataset_train)
-                partial_resid_mu_train <- resid_train - mu_x_raw_train
+                resid_for_coding <- if(probit_outcome_model) resid_train - y_bar_train else resid_train
+                partial_resid_mu_train <- resid_for_coding - mu_x_raw_train
                 if (has_rfx) {
                     rfx_preds_train <- rfx_model$predict(rfx_dataset_train, rfx_tracker_train)
                     partial_resid_mu_train <- partial_resid_mu_train - rfx_preds_train
@@ -1193,15 +1207,16 @@ bcf <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_group_id
                     mu_forest_pred <- active_forest_mu$predict(forest_dataset_train)
                     tau_forest_pred <- active_forest_tau$predict(forest_dataset_train)
                     forest_pred <- mu_forest_pred + tau_forest_pred
-                    mu0 <- forest_pred[y_train == 0]
-                    mu1 <- forest_pred[y_train == 1]
+                    eta_pred <- forest_pred + y_bar_train
+                    mu0 <- eta_pred[y_train == 0]
+                    mu1 <- eta_pred[y_train == 1]
                     u0 <- runif(sum(y_train == 0), 0, pnorm(0 - mu0))
                     u1 <- runif(sum(y_train == 1), pnorm(0 - mu1), 1)
                     resid_train[y_train==0] <- mu0 + qnorm(u0)
                     resid_train[y_train==1] <- mu1 + qnorm(u1)
                     
                     # Update outcome
-                    outcome_train$update_data(resid_train - forest_pred)
+                    outcome_train$update_data(resid_train - y_bar_train - forest_pred)
                 }
                 
                 # Sample the prognostic forest
@@ -1235,7 +1250,8 @@ bcf <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_group_id
                     # Estimate mu(X) and tau(X) and compute y - mu(X)
                     mu_x_raw_train <- active_forest_mu$predict_raw(forest_dataset_train)
                     tau_x_raw_train <- active_forest_tau$predict_raw(forest_dataset_train)
-                    partial_resid_mu_train <- resid_train - mu_x_raw_train
+                    resid_for_coding <- if(probit_outcome_model) resid_train - y_bar_train else resid_train
+                    partial_resid_mu_train <- resid_for_coding - mu_x_raw_train
                     if (has_rfx) {
                         rfx_preds_train <- rfx_model$predict(rfx_dataset_train, rfx_tracker_train)
                         partial_resid_mu_train <- partial_resid_mu_train - rfx_preds_train
@@ -1464,6 +1480,14 @@ bcf <- function(X_train, Z_train, y_train, propensity_train = NULL, rfx_group_id
     }
     class(result) <- "bcfmodel"
     
+    # Restore global RNG state if user provided a random seed
+    if (custom_rng) {
+        if (has_existing_random_seed) {
+            .Random.seed <- original_global_seed
+        } else {
+            rm(".Random.seed", envir = .GlobalEnv)
+        }
+    }
     return(result)
 }
 

@@ -431,9 +431,9 @@ cpp11::writable::list updateLinearTreatmentCpp_amr(
     residual_map = y_target - new_fit;
     
     // 5. Sample local shrinkage parameters tau_beta (and nu)
-    if (sample_global_prior == "hybrid") {
+    if (sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") {
       for(int j = 0; j < p_mod + regularize_ATE; j++){
-        tau_beta[j] = 10.0;
+        tau_beta[j] = (sample_global_prior == "hybrid") ? 10.0 : 1.0;
       }
       if(unlink){
         for(size_t k = 0; k < int_pairs.size(); k++){
@@ -467,7 +467,7 @@ cpp11::writable::list updateLinearTreatmentCpp_amr(
     }
     
     // 6. Sample global shrinkage parameter tau_glob
-    if (sample_global_prior == "half-cauchy" || sample_global_prior == "hybrid") {
+    if (sample_global_prior == "half-cauchy" || sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") {
       xi = rinvgamma_amr(1.0, 1.0 + 1.0 / safe_var(tau_glob*tau_glob));
       double sum_scaled_sq_betas = 0.0;
       double shape_tau_glob = 1.0 / 2.0;
@@ -930,34 +930,34 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_amr(
     residual_map = y_target - new_fit;
     
     // 5. Sample local shrinkage parameters tau_beta (and nu)
-    if (sample_global_prior == "hybrid") {
+    if (sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") {
       for(int j = 0; j < p_mod + regularize_ATE; j++){
-        tau_beta[j] = 10.0;
+        tau_beta[j] = (sample_global_prior == "hybrid") ? 10.0 : 1.0;
       }
       if(unlink){
         for(size_t k = 0; k < int_pairs.size(); k++){
           int full_idx = p_mod + k + regularize_ATE;
           nu[full_idx] = rinvgamma_amr(1.0, 1.0 + 1.0 / safe_var(tau_beta[full_idx]*tau_beta[full_idx]));
-          tau_beta[full_idx] = std::sqrt(safe_var(rinvgamma_amr(1.0, (1.0 / safe_var(nu[full_idx])) + (beta_int_tilde[k] * beta_int_tilde[k]) / safe_var(2.0 * tau_glob * tau_glob))));
+          tau_beta[full_idx] = std::sqrt(safe_var(rinvgamma_amr(1.0, (1.0 / safe_var(nu[full_idx])) + (beta_int_current(k) * beta_int_current(k)) / safe_var(2.0 * tau_glob * tau_glob * sigma * sigma))));
         }
       }
     } else if (sample_global_prior != "OLS") {
       for(int j = 0; j < p_mod + regularize_ATE; j++){
-        double current_coeff_tilde;
+        double current_coeff;
         if (regularize_ATE) {
-          current_coeff_tilde = (j == 0) ? alpha_tilde : beta_tilde[j - 1];
+          current_coeff = (j == 0) ? alpha_current : beta_current(j - 1);
         } else {
-          current_coeff_tilde = beta_tilde[j];
+          current_coeff = beta_current(j);
         }
         nu[j] = rinvgamma_amr(1.0, 1.0 + 1.0 / safe_var(tau_beta[j]*tau_beta[j]));
-        tau_beta[j] = std::sqrt(safe_var(rinvgamma_amr(1.0, (1.0 / safe_var(nu[j])) + (current_coeff_tilde * current_coeff_tilde) / safe_var(2.0 * tau_glob * tau_glob))));
+        tau_beta[j] = std::sqrt(safe_var(rinvgamma_amr(1.0, (1.0 / safe_var(nu[j])) + (current_coeff * current_coeff) / safe_var(2.0 * tau_glob * tau_glob * sigma * sigma))));
       }
       
       if(unlink){
         for(size_t k = 0; k < int_pairs.size(); k++){
           int full_idx = p_mod + k + regularize_ATE;
           nu[full_idx] = rinvgamma_amr(1.0, 1.0 + 1.0 / safe_var(tau_beta[full_idx]*tau_beta[full_idx]));
-          tau_beta[full_idx] = std::sqrt(safe_var(rinvgamma_amr(1.0, (1.0 / safe_var(nu[full_idx])) + (beta_int_tilde[k] * beta_int_tilde[k]) / safe_var(2.0 * tau_glob * tau_glob))));
+          tau_beta[full_idx] = std::sqrt(safe_var(rinvgamma_amr(1.0, (1.0 / safe_var(nu[full_idx])) + (beta_int_current(k) * beta_int_current(k)) / safe_var(2.0 * tau_glob * tau_glob * sigma * sigma))));
         }
       }
     } else {
@@ -967,36 +967,36 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_amr(
     
     // 6. Sample global shrinkage parameter tau_glob
     // *** THIS IS THE KEY NCP STEP: sigma2 IS REMOVED ***
-    if (sample_global_prior == "half-cauchy" || sample_global_prior == "hybrid") {
+    if (sample_global_prior == "half-cauchy" || sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") {
       xi = rinvgamma_amr(1.0, 1.0 + 1.0 / safe_var(tau_glob*tau_glob));
-      double sum_scaled_sq_betas_tilde = 0.0;
+      double sum_scaled_sq_betas = 0.0;
       double shape_tau_glob = 1.0 / 2.0;
       
       if (sample_global_prior != "hybrid") {
         if(regularize_ATE){
-          sum_scaled_sq_betas_tilde += (alpha_tilde*alpha_tilde) / safe_var(tau_beta[0] * tau_beta[0]);
+          sum_scaled_sq_betas += (alpha_current*alpha_current) / safe_var(tau_beta[0] * tau_beta[0]);
           shape_tau_glob += 0.5;
         }
         for(int j = 0; j < p_mod; j++) {
-          sum_scaled_sq_betas_tilde += (beta_tilde[j]*beta_tilde[j]) / safe_var(tau_beta[j + regularize_ATE] * tau_beta[j + regularize_ATE]);
+          sum_scaled_sq_betas += (beta_current(j)*beta_current(j)) / safe_var(tau_beta[j + regularize_ATE] * tau_beta[j + regularize_ATE]);
           shape_tau_glob += 0.5;
         }
       }
       
       if(unlink){
         for(int k = 0; k < p_int; k++) {
-          sum_scaled_sq_betas_tilde += (beta_int_tilde[k] * beta_int_tilde[k]) / safe_var(tau_beta[p_mod + regularize_ATE + k] * tau_beta[p_mod + regularize_ATE + k]);
+          sum_scaled_sq_betas += (beta_int_current(k) * beta_int_current(k)) / safe_var(tau_beta[p_mod + regularize_ATE + k] * tau_beta[p_mod + regularize_ATE + k]);
           shape_tau_glob += 0.5;
         } 
       } else if (sample_global_prior != "hybrid") {
         for(size_t k = 0; k < int_pairs.size(); ++k) {
           double var_k = tau_int * tau_beta[regularize_ATE + int_pairs[k].first] * tau_beta[regularize_ATE + int_pairs[k].second];
-          sum_scaled_sq_betas_tilde += (beta_int_tilde[k] * beta_int_tilde[k]) / safe_var(var_k);
+          sum_scaled_sq_betas += (beta_int_current(k) * beta_int_current(k)) / safe_var(var_k);
           shape_tau_glob += 0.5;
         }
       } 
       
-      double rate_tau_glob = (1.0 / safe_var(xi)) + (1.0 / safe_var(2.0)) * sum_scaled_sq_betas_tilde; // sigma2 removed
+      double rate_tau_glob = (1.0 / safe_var(xi)) + (1.0 / safe_var(2.0 * sigma * sigma)) * sum_scaled_sq_betas;
       tau_glob = std::sqrt(safe_var(rinvgamma_amr(shape_tau_glob, rate_tau_glob)));
       
     } else if (sample_global_prior == "half-normal") { 
