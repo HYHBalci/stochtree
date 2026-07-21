@@ -193,7 +193,6 @@ writable::list updateLinearTreatmentCpp_cpp(
   int offset_alpha = regularize_ATE ? 1 : 0;
   int offset_beta = offset_alpha;
   int offset_beta_int = offset_beta + p_mod;
-  int P_combined = offset_beta_int + p_int; 
   
   if (gibbs) {
     int P_combined = offset_beta_int + p_int;
@@ -325,7 +324,7 @@ writable::list updateLinearTreatmentCpp_cpp(
       }
       
     } else {
-      for(size_t j = 0; j < tau_beta.size(); j++) tau_beta[j] = 10.0;
+      for(int j = 0; j < tau_beta.size(); j++) tau_beta[j] = 10.0;
       
       tau_glob = 1.0;
     }
@@ -492,26 +491,28 @@ writable::list updateLinearTreatmentCpp_NCP_cpp(
     int P_combined = offset_beta_int + p_int;
     
     // Target y*
-    Eigen::VectorXd y_target = residual_map;
-    if(regularize_ATE) y_target.array() += Z_map.array() * alpha_current;
-    for (int j = 0; j < p_mod; ++j) y_target.array() += Z_map.array() * X_map.col(j).array() * beta_current(j);
-    for (size_t k = 0; k < int_pairs.size(); ++k) y_target.array() += Z_map.array() * X_map.col(int_pairs[k].first).array() * X_map.col(int_pairs[k].second).array() * beta_int_current(k);
+    Eigen::VectorXd full_beta_current(P_combined);
+    if(regularize_ATE) full_beta_current(0) = alpha_current;
+    for(int j = 0; j < p_mod; ++j) full_beta_current(j + offset_beta) = beta_current(j);
+    for(int k = 0; k < p_int; ++k) full_beta_current(offset_beta_int + k) = beta_int_current(k);
+    
+    Eigen::Map<const Eigen::MatrixXd> X_design_map(REAL(X_design), n, P_combined);
+    Eigen::VectorXd y_target = residual_map + X_design_map * full_beta_current;
     
     
     
     // X_star (NCP Design Matrix)
-    Eigen::MatrixXd X_star(n, P_combined);
-    if(regularize_ATE) X_star.col(0) = Z_map.array() * tau_beta[0] * tau_glob_main_pred;
-    for (int j = 0; j < p_mod; ++j) X_star.col(offset_beta + j) = Z_map.array() * X_map.col(j).array() * tau_beta[j + offset_beta] * tau_glob_main_pred;
+    Eigen::VectorXd scaling(P_combined);
+    if(regularize_ATE) scaling(0) = tau_beta[0] * tau_glob_main_pred;
+    for (int j = 0; j < p_mod; ++j) scaling(j + offset_beta) = tau_beta[j + offset_beta] * tau_glob_main_pred;
     for (size_t k = 0; k < int_pairs.size(); ++k) {
       double V_k = unlink ? tau_beta[offset_beta_int + k] : (std::sqrt(tau_int) * tau_beta[offset_beta + int_pairs[k].first] * tau_beta[offset_beta + int_pairs[k].second]);
-      X_star.col(offset_beta_int + k) = Z_map.array() * X_map.col(int_pairs[k].first).array() * X_map.col(int_pairs[k].second).array() * V_k * tau_glob;
+      scaling(offset_beta_int + k) = V_k * tau_glob;
     }
     
-    
-    
-    Eigen::MatrixXd XtX = X_star.transpose() * X_star;
-    Eigen::VectorXd Xty = X_star.transpose() * y_target;
+    Eigen::Map<const Eigen::MatrixXd> XtX_design_map(REAL(XtX_design), P_combined, P_combined);
+    Eigen::MatrixXd XtX = scaling.asDiagonal() * XtX_design_map * scaling.asDiagonal();
+    Eigen::VectorXd Xty = scaling.asDiagonal() * (X_design_map.transpose() * y_target);
     
     // --- FIX 1: Explicit Diagonal Update ---
     Eigen::MatrixXd Prec = XtX / sigma2;
@@ -551,10 +552,11 @@ writable::list updateLinearTreatmentCpp_NCP_cpp(
     
     
     // Residual Update
-    Eigen::VectorXd new_fit = Eigen::VectorXd::Zero(n);
-    if(regularize_ATE) new_fit.array() += Z_map.array() * alpha_current;
-    for (int j = 0; j < p_mod; ++j) new_fit.array() += Z_map.array() * X_map.col(j).array() * beta_current(j);
-    for (size_t k = 0; k < int_pairs.size(); ++k) new_fit.array() += Z_map.array() * X_map.col(int_pairs[k].first).array() * X_map.col(int_pairs[k].second).array() * beta_int_current(k);
+    if(regularize_ATE) full_beta_current(0) = alpha_current;
+    for(int j = 0; j < p_mod; ++j) full_beta_current(j + offset_beta) = beta_current(j);
+    for(int k = 0; k < p_int; ++k) full_beta_current(offset_beta_int + k) = beta_int_current(k);
+    
+    Eigen::VectorXd new_fit = X_design_map * full_beta_current;
     // 
     residual_map = y_target - new_fit;
     
@@ -586,7 +588,7 @@ writable::list updateLinearTreatmentCpp_NCP_cpp(
       }
       
     } else {
-      for(size_t j = 0; j < tau_beta.size(); j++) tau_beta[j] = 10.0;
+      for(int j = 0; j < tau_beta.size(); j++) tau_beta[j] = 10.0;
       
       tau_glob = 1.0;
     }
@@ -780,7 +782,7 @@ writable::list run_ltr_mse_cpp(
         
         for (int m = 0; m < actual_M; ++m) {
             int idx = floor(Rf_runif(0.0, valid_pairs.size()));
-            if(idx == valid_pairs.size()) idx = valid_pairs.size() - 1;
+            if(idx == (int)valid_pairs.size()) idx = valid_pairs.size() - 1;
             int i = valid_pairs[idx].first;
             int j = valid_pairs[idx].second;
             Omega(m) = tau_map(i) - tau_map(j);

@@ -307,16 +307,13 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
     Eigen::Map<Eigen::VectorXd> beta_int_map(REAL(beta_int), p_int);
     
     // 1. Construct target variable y* = residual + old_fit
-    Eigen::VectorXd y_target = residual_map;
-    if(regularize_ATE){
-      y_target.array() += Z_map.array() * alpha;
-    }
-    for (int j = 0; j < p_mod; ++j) {
-      y_target.array() += Z_map.array() * X_map.col(j).array() * beta_map(j);
-    }
-    for (size_t k = 0; k < int_pairs.size(); ++k) {
-      y_target.array() += Z_map.array() * X_map.col(int_pairs[k].first).array() * X_map.col(int_pairs[k].second).array() * beta_int_map(k);
-    }
+    Eigen::VectorXd full_beta_current(P_combined);
+    if(regularize_ATE) full_beta_current(0) = alpha;
+    for(int j = 0; j < p_mod; ++j) full_beta_current(j + regularize_ATE) = beta_map(j);
+    for(int k = 0; k < p_int; ++k) full_beta_current(p_mod + regularize_ATE + k) = beta_int_map(k);
+    
+    Eigen::Map<const Eigen::MatrixXd> X_design_map(REAL(X_design), n, P_combined);
+    Eigen::VectorXd y_target = residual_map + X_design_map * full_beta_current;
     
     // 2. Define prior variance matrix D (excluding sigma^2)
     Eigen::VectorXd D_diag(P_combined);
@@ -341,8 +338,6 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
       
       // Use precomputed X_design instead of manually constructing X_combined
       Eigen::Map<const Eigen::MatrixXd> X_design_map(REAL(X_design), n, P_combined);
-      
-      double sigma2 = sigma * sigma;
       Eigen::MatrixXd D_scaled_mat = D_mat; // Create the scaled prior covariance
       Eigen::VectorXd D_scaled_diag = D_diag;
       
@@ -429,12 +424,11 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
     }
     
     // 4. Recalculate residual based on updated (or kept) coefficients
-    Eigen::VectorXd new_fit = Eigen::VectorXd::Zero(n);
-    if(regularize_ATE){
-      new_fit.array() += Z_map.array() * alpha;
-    }
-    for (int j=0; j<p_mod; ++j) new_fit.array() += Z_map.array() * X_map.col(j).array() * beta[j];
-    for (size_t k = 0; k < int_pairs.size(); ++k) new_fit.array() += Z_map.array() * X_map.col(int_pairs[k].first).array() * X_map.col(int_pairs[k].second).array() * beta_int[k];
+    if(regularize_ATE) full_beta_current(0) = alpha;
+    for(int j=0; j<p_mod; ++j) full_beta_current(j + regularize_ATE) = beta[j];
+    for(int k=0; k<p_int; ++k) full_beta_current(p_mod + regularize_ATE + k) = beta_int[k];
+    
+    Eigen::VectorXd new_fit = X_design_map * full_beta_current;
     residual_map = y_target - new_fit;
     
     // 5. Sample local shrinkage parameters tau_beta (and nu)
@@ -470,7 +464,7 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
         }
       }
     } else {
-      for(size_t j = 0; j < tau_beta.size(); j++) tau_beta[j] = 1.0;
+      for(int j = 0; j < tau_beta.size(); j++) tau_beta[j] = 1.0;
       tau_glob = 1.0;
     }
     
@@ -537,16 +531,13 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
     Eigen::Map<Eigen::VectorXd> beta_int_map(REAL(beta_int), p_int);
     
     // 1. Construct target variable y* = residual + old_fit
-    Eigen::VectorXd y_target = residual_map;
-    if(regularize_ATE){
-      y_target.array() += Z_map.array() * alpha;
-    }
-    for (int j = 0; j < p_mod; ++j) {
-      y_target.array() += Z_map.array() * X_map.col(j).array() * beta_map(j);
-    }
-    for (size_t k = 0; k < int_pairs.size(); ++k) {
-      y_target.array() += Z_map.array() * X_map.col(int_pairs[k].first).array() * X_map.col(int_pairs[k].second).array() * beta_int_map(k);
-    }
+    Eigen::VectorXd full_beta_current(P_combined);
+    if(regularize_ATE) full_beta_current(0) = alpha;
+    for(int j = 0; j < p_mod; ++j) full_beta_current(j + regularize_ATE) = beta_map(j);
+    for(int k = 0; k < p_int; ++k) full_beta_current(p_mod + regularize_ATE + k) = beta_int_map(k);
+    
+    Eigen::Map<const Eigen::MatrixXd> X_design_map(REAL(X_design), n, P_combined);
+    Eigen::VectorXd y_target = residual_map + X_design_map * full_beta_current;
     
     // 2. Define prior variance matrix D (excluding sigma^2)
     Eigen::VectorXd D_diag(P_combined);
@@ -563,8 +554,6 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
     
     // 3. Block sample all beta coefficients
     Eigen::VectorXd beta_combined_new_eigen(P_combined);
-    
-    Eigen::Map<const Eigen::MatrixXd> X_design_map(REAL(X_design), n, P_combined);
     Eigen::Map<const Eigen::MatrixXd> XtX_design_map(REAL(XtX_design), P_combined, P_combined);
     
     // Step A: Use precomputed XtX and calculate Xt_y
@@ -598,12 +587,11 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
     for(int k=0; k<p_int; ++k) beta_int[k] = beta_combined_new_eigen(p_mod + k + regularize_ATE);
     
     // 5. Update residual map based on new coefficients
-    Eigen::VectorXd new_fit = Eigen::VectorXd::Zero(n);
-    if(regularize_ATE){
-      new_fit.array() += Z_map.array() * alpha;
-    }
-    for (int j=0; j<p_mod; ++j) new_fit.array() += Z_map.array() * X_map.col(j).array() * beta[j];
-    for (size_t k = 0; k < int_pairs.size(); ++k) new_fit.array() += Z_map.array() * X_map.col(int_pairs[k].first).array() * X_map.col(int_pairs[k].second).array() * beta_int[k];
+    if(regularize_ATE) full_beta_current(0) = alpha;
+    for(int j=0; j<p_mod; ++j) full_beta_current(j + regularize_ATE) = beta[j];
+    for(int k=0; k<p_int; ++k) full_beta_current(p_mod + regularize_ATE + k) = beta_int[k];
+    
+    Eigen::VectorXd new_fit = X_design_map * full_beta_current;
     residual_map = y_target - new_fit;
     
     // 6. Sample tau_beta using slice sampler, now conditional on the new block of betas
@@ -800,16 +788,13 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_cpp_old(
     
     // 1. Construct target variable y* = residual + old_fit
     //    Uses the *real* beta/alpha values we just calculated
-    Eigen::VectorXd y_target = residual_map;
-    if(regularize_ATE){
-      y_target.array() += Z_map.array() * alpha_current;
-    }
-    for (int j = 0; j < p_mod; ++j) {
-      y_target.array() += Z_map.array() * X_map.col(j).array() * beta_current(j);
-    }
-    for (size_t k = 0; k < int_pairs.size(); ++k) {
-      y_target.array() += Z_map.array() * X_map.col(int_pairs[k].first).array() * X_map.col(int_pairs[k].second).array() * beta_int_current(k);
-    }
+    Eigen::VectorXd full_beta_current(P_combined);
+    if(regularize_ATE) full_beta_current(0) = alpha_current;
+    for(int j = 0; j < p_mod; ++j) full_beta_current(j + regularize_ATE) = beta_current(j);
+    for(int k = 0; k < p_int; ++k) full_beta_current(p_mod + regularize_ATE + k) = beta_int_current(k);
+    
+    Eigen::Map<const Eigen::MatrixXd> X_design_map(REAL(X_design), n, P_combined);
+    Eigen::VectorXd y_target = residual_map + X_design_map * full_beta_current;
     
     // This will hold the new sample for *tilde* coefficients
     Eigen::VectorXd beta_tilde_combined_new_eigen(P_combined);
@@ -821,21 +806,23 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_cpp_old(
       // Prior: beta_tilde ~ N(0, I_p)
       
       // Construct scaled design matrix X*
-      Eigen::MatrixXd X_star(n, P_combined);
-      if(regularize_ATE){
+      Eigen::VectorXd scaling(P_combined);
+      if(regularize_ATE) {
         double tau_glob_main = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
-        X_star.col(0) = Z_map.array() * tau_beta[0] * tau_glob_main;
+        scaling(0) = tau_beta[0] * tau_glob_main;
       }
-      for (int j = 0; j < p_mod; ++j) { 
+      for (int j = 0; j < p_mod; ++j) {
         double tau_glob_main = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
-        X_star.col(j + regularize_ATE) = Z_map.array() * X_map.col(j).array() * tau_beta[j + regularize_ATE] * tau_glob_main;
-      } 
-      for (size_t k = 0; k < int_pairs.size(); ++k) {
+        scaling(j + regularize_ATE) = tau_beta[j + regularize_ATE] * tau_glob_main;
+      }
+      for (int k = 0; k < p_int; ++k) {
         double V_k_star_tau_only = unlink ?
         (tau_beta[p_mod + regularize_ATE + k]) :
         (std::sqrt(tau_int) * tau_beta[int_pairs[k].first + regularize_ATE] * tau_beta[int_pairs[k].second + regularize_ATE]);
-        X_star.col(p_mod + regularize_ATE + k) = Z_map.array() * X_map.col(int_pairs[k].first).array() * X_map.col(int_pairs[k].second).array() * V_k_star_tau_only * tau_glob;
+        scaling(p_mod + regularize_ATE + k) = V_k_star_tau_only * tau_glob;
       }
+      
+      Eigen::MatrixXd X_star = X_design_map * scaling.asDiagonal();
       
       Eigen::MatrixXd X_star_scaled = X_star / sigma;
       Eigen::MatrixXd D_scaled_mat = Eigen::MatrixXd::Identity(P_combined, P_combined) / sigma2; // Prior is N(0, I)
@@ -867,27 +854,26 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_cpp_old(
       // Prior: beta_tilde ~ N(0, I_p)
       
       // Step A: Calculate X*tX* and X*t_y
-      Eigen::MatrixXd XtX_star = Eigen::MatrixXd::Zero(P_combined, P_combined);
-      Eigen::VectorXd Xt_y_star = Eigen::VectorXd::Zero(P_combined);
-      for (int i = 0; i < n; ++i) {
-        Eigen::VectorXd x_row_star(P_combined);
-        if(regularize_ATE){
-          double tau_glob_main = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
-          x_row_star(0) = Z_map(i) * tau_beta[0] * tau_glob_main;
-        }
-        for (int j = 0; j < p_mod; ++j) {
-          double tau_glob_main = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
-          x_row_star(j + regularize_ATE) = Z_map(i) * X_map(i, j) * tau_beta[j + regularize_ATE] * tau_glob_main;
-        }
-        for (size_t k = 0; k < int_pairs.size(); ++k) {
-          double V_k_star_tau_only = unlink ?
-          (tau_beta[p_mod + regularize_ATE + k]) :
-          (std::sqrt(tau_int) * tau_beta[int_pairs[k].first + regularize_ATE] * tau_beta[int_pairs[k].second + regularize_ATE]);
-          x_row_star(p_mod + regularize_ATE + k) = Z_map(i) * X_map(i, int_pairs[k].first) * X_map(i, int_pairs[k].second) * V_k_star_tau_only * tau_glob;
-        }
-        XtX_star.selfadjointView<Eigen::Lower>().rankUpdate(x_row_star);
-        Xt_y_star += x_row_star * y_target(i);
+      Eigen::VectorXd scaling(P_combined);
+      if(regularize_ATE) {
+        double tau_glob_main = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
+        scaling(0) = tau_beta[0] * tau_glob_main;
       }
+      for (int j = 0; j < p_mod; ++j) {
+        double tau_glob_main = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
+        scaling(j + regularize_ATE) = tau_beta[j + regularize_ATE] * tau_glob_main;
+      }
+      for (int k = 0; k < p_int; ++k) {
+        double V_k_star_tau_only = unlink ?
+        (tau_beta[p_mod + regularize_ATE + k]) :
+        (std::sqrt(tau_int) * tau_beta[int_pairs[k].first + regularize_ATE] * tau_beta[int_pairs[k].second + regularize_ATE]);
+        scaling(p_mod + regularize_ATE + k) = V_k_star_tau_only * tau_glob;
+      }
+      
+      Eigen::Map<const Eigen::MatrixXd> XtX_design_map(REAL(XtX_design), P_combined, P_combined);
+      Eigen::MatrixXd XtX_star = scaling.asDiagonal() * XtX_design_map * scaling.asDiagonal();
+      Eigen::VectorXd Xt_y_star = scaling.asDiagonal() * (X_design_map.transpose() * y_target);
+      
       XtX_star = XtX_star.selfadjointView<Eigen::Lower>();
       
       // Post_Prec = (X*tX* / sigma^2) + I_p
@@ -944,12 +930,11 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_cpp_old(
       beta_int_current(k) = beta_int_tilde_map(k) * V_k_star_tau_only * tau_glob * sigma;
     }
     
-    Eigen::VectorXd new_fit = Eigen::VectorXd::Zero(n);
-    if(regularize_ATE){
-      new_fit.array() += Z_map.array() * alpha_current;
-    }
-    for (int j=0; j<p_mod; ++j) new_fit.array() += Z_map.array() * X_map.col(j).array() * beta_current(j);
-    for (size_t k = 0; k < int_pairs.size(); ++k) new_fit.array() += Z_map.array() * X_map.col(int_pairs[k].first).array() * X_map.col(int_pairs[k].second).array() * beta_int_current(k);
+    if(regularize_ATE) full_beta_current(0) = alpha_current;
+    for(int j=0; j<p_mod; ++j) full_beta_current(j + regularize_ATE) = beta_current(j);
+    for(int k=0; k<p_int; ++k) full_beta_current(p_mod + regularize_ATE + k) = beta_int_current(k);
+    
+    Eigen::VectorXd new_fit = X_design_map * full_beta_current;
     residual_map = y_target - new_fit;
     
     // 5. Sample local shrinkage parameters tau_beta (and nu)
@@ -986,7 +971,7 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_cpp_old(
         }
       }
     } else {
-      for(size_t j = 0; j < tau_beta.size(); j++) tau_beta[j] = 1.0;
+      for(int j = 0; j < tau_beta.size(); j++) tau_beta[j] = 1.0;
       tau_glob = 1.0;
     }
     
