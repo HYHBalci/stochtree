@@ -218,7 +218,7 @@ writable::list updateLinearTreatmentCpp_cpp(
     
     // Alpha & Beta priors
     for (int j = 0; j < p_mod + regularize_ATE; ++j) {
-      double tau_glob_main = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
+      double tau_glob_main = (sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") ? 1.0 : tau_glob;
       D_diag(j) = safe_var_linear(tau_beta[j] * tau_beta[j] * tau_glob_main * tau_glob_main);
     } 
     // Interaction priors
@@ -335,7 +335,7 @@ writable::list updateLinearTreatmentCpp_cpp(
       double sum_scaled = 0.0;
       double shape_glob = 1.0 / 2.0;
       
-      if (sample_global_prior != "hybrid") {
+      if (sample_global_prior != "hybrid" && sample_global_prior != "hc-hs") {
         if(regularize_ATE){
           sum_scaled += (alpha*alpha) / safe_var_linear(tau_beta[0]*tau_beta[0]);
           shape_glob += 0.5;
@@ -351,7 +351,7 @@ writable::list updateLinearTreatmentCpp_cpp(
           sum_scaled += (beta_int[k]*beta_int[k]) / safe_var_linear(tau_beta[offset_beta_int+k]*tau_beta[offset_beta_int+k]);
           shape_glob += 0.5;
         }
-      } else if (sample_global_prior != "hybrid") {
+      } else if (sample_global_prior != "hybrid" && sample_global_prior != "hc-hs") {
         for(size_t k=0; k<int_pairs.size(); k++) {
           double var_k = tau_int * tau_beta[offset_beta + int_pairs[k].first] * tau_beta[offset_beta + int_pairs[k].second];
           sum_scaled += (beta_int[k]*beta_int[k]) / safe_var_linear(var_k);
@@ -468,7 +468,7 @@ writable::list updateLinearTreatmentCpp_NCP_cpp(
   int offset_alpha = regularize_ATE ? 1 : 0;
   int offset_beta = offset_alpha;
   int offset_beta_int = offset_beta + p_mod;
-  double tau_glob_main_pred = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
+  double tau_glob_main_pred = (sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") ? 1.0 : tau_glob;
   if(regularize_ATE) alpha_current = alpha_tilde * tau_beta[0] * tau_glob_main_pred;
   for (int j = 0; j < p_mod; ++j) beta_current(j) = beta_tilde_map(j) * tau_beta[j + offset_beta] * tau_glob_main_pred;
   for (size_t k = 0; k < int_pairs.size(); ++k) {
@@ -542,7 +542,7 @@ writable::list updateLinearTreatmentCpp_NCP_cpp(
     
     
     // Update Real
-    double tau_glob_main = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
+    double tau_glob_main = (sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") ? 1.0 : tau_glob;
     if(regularize_ATE) alpha_current = alpha_tilde * tau_beta[0] * tau_glob_main;
     for (int j = 0; j < p_mod; ++j) beta_current(j) = beta_tilde_map(j) * tau_beta[j + offset_beta] * tau_glob_main;
     for (size_t k = 0; k < int_pairs.size(); ++k) {
@@ -598,7 +598,7 @@ writable::list updateLinearTreatmentCpp_NCP_cpp(
       double sum_scaled = 0.0;
       double shape = 1.0 / 2.0;
       
-      if (sample_global_prior != "hybrid") {
+      if (sample_global_prior != "hybrid" && sample_global_prior != "hc-hs") {
         if(regularize_ATE){
           sum_scaled += (alpha_current*alpha_current) / safe_var_linear(tau_beta[0]*tau_beta[0]);
           shape += 0.5;
@@ -614,7 +614,7 @@ writable::list updateLinearTreatmentCpp_NCP_cpp(
           sum_scaled += (beta_int_current(k) * beta_int_current(k)) / safe_var_linear(tau_beta[offset_beta_int + k] * tau_beta[offset_beta_int + k]);
           shape += 0.5;
         } 
-      } else if (sample_global_prior != "hybrid") {
+      } else if (sample_global_prior != "hybrid" && sample_global_prior != "hc-hs") {
         for(size_t k = 0; k < int_pairs.size(); ++k) {
           double var_k = tau_int * tau_beta[offset_beta + int_pairs[k].first] * tau_beta[offset_beta + int_pairs[k].second];
           sum_scaled += (beta_int_current(k) * beta_int_current(k)) / safe_var_linear(var_k);

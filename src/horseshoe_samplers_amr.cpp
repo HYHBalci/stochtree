@@ -462,7 +462,7 @@ cpp11::writable::list updateLinearTreatmentCpp_amr(
       double sum_scaled_sq_betas = 0.0;
       double shape_tau_glob = 1.0 / 2.0;
       
-      if (sample_global_prior != "hybrid") {
+      if (sample_global_prior != "hybrid" && sample_global_prior != "hc-hs") {
         if(regularize_ATE){
           sum_scaled_sq_betas += (alpha*alpha) / safe_var(tau_beta[0] * tau_beta[0]);
           shape_tau_glob += 0.5;
@@ -478,7 +478,7 @@ cpp11::writable::list updateLinearTreatmentCpp_amr(
           sum_scaled_sq_betas += (beta_int[k] * beta_int[k]) / safe_var(tau_beta[p_mod + regularize_ATE + k] * tau_beta[p_mod + regularize_ATE + k]);
           shape_tau_glob += 0.5;
         } 
-      } else if (sample_global_prior != "hybrid") {
+      } else if (sample_global_prior != "hybrid" && sample_global_prior != "hc-hs") {
         for(size_t k = 0; k < int_pairs.size(); ++k) {
           double var_k = tau_int * tau_beta[regularize_ATE + int_pairs[k].first] * tau_beta[regularize_ATE + int_pairs[k].second];
           sum_scaled_sq_betas += (beta_int[k] * beta_int[k]) / safe_var(var_k);
@@ -949,7 +949,7 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_amr(
       double sum_scaled_sq_betas = 0.0;
       double shape_tau_glob = 1.0 / 2.0;
       
-      if (sample_global_prior != "hybrid") {
+      if (sample_global_prior != "hybrid" && sample_global_prior != "hc-hs") {
         if(regularize_ATE){
           sum_scaled_sq_betas += (alpha_current*alpha_current) / safe_var(tau_beta[0] * tau_beta[0]);
           shape_tau_glob += 0.5;
@@ -965,7 +965,7 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_amr(
           sum_scaled_sq_betas += (beta_int_current(k) * beta_int_current(k)) / safe_var(tau_beta[p_mod + regularize_ATE + k] * tau_beta[p_mod + regularize_ATE + k]);
           shape_tau_glob += 0.5;
         } 
-      } else if (sample_global_prior != "hybrid") {
+      } else if (sample_global_prior != "hybrid" && sample_global_prior != "hc-hs") {
         for(size_t k = 0; k < int_pairs.size(); ++k) {
           double var_k = tau_int * tau_beta[regularize_ATE + int_pairs[k].first] * tau_beta[regularize_ATE + int_pairs[k].second];
           sum_scaled_sq_betas += (beta_int_current(k) * beta_int_current(k)) / safe_var(var_k);

@@ -171,7 +171,7 @@ double logPosteriorTauGlob_old(double tau_glob,
   double log2pi = std::log(2.0 * M_PI);
   double logLik = 0.0;
   
-  if (prior_type != "hybrid") {
+  if (prior_type != "hybrid" && prior_type != "hc-hs") {
     for (size_t s = 0; s < betas.size(); s++) {
       double var_main = safe_var(sigma2 * (tau[s] * tau[s]) * (tau_glob * tau_glob));
       logLik += -0.5 * (log2pi + safe_log(var_main)) - 0.5 * (betas[s] * betas[s] / var_main);
@@ -318,7 +318,7 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
     // 2. Define prior variance matrix D (excluding sigma^2)
     Eigen::VectorXd D_diag(P_combined);
     for (int j = 0; j < p_mod + regularize_ATE; ++j) {
-      double tau_glob_main = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
+      double tau_glob_main = (sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") ? 1.0 : tau_glob;
       D_diag(j) = safe_var(tau_beta[j] * tau_beta[j] * tau_glob_main * tau_glob_main);
     }
     for (size_t k = 0; k < int_pairs.size(); ++k) {
@@ -452,7 +452,7 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
           current_coeff = beta[j];
         }
         nu[j] = rinvgamma(1.0, 1.0 + 1.0 / safe_var(tau_beta[j]*tau_beta[j]));
-        double tau_glob_main = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
+        double tau_glob_main = (sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") ? 1.0 : tau_glob;
         tau_beta[j] = std::sqrt(safe_var(rinvgamma(1.0, (1.0 / safe_var(nu[j])) + (current_coeff * current_coeff) / safe_var(2.0 * tau_glob_main * tau_glob_main * sigma2))));
       }
       
@@ -472,7 +472,8 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
     if (sample_global_prior == "half-cauchy" || sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") {
       xi = rinvgamma(1.0, 1.0 + 1.0 / safe_var(tau_glob*tau_glob));
       double sum_scaled_sq_betas = 0.0;
-      if (sample_global_prior != "hybrid") {
+      double shape = 1.0 / 2.0;
+      if (sample_global_prior != "hybrid" && sample_global_prior != "hc-hs") {
         if(regularize_ATE){
           sum_scaled_sq_betas += (alpha*alpha) / safe_var(tau_beta[0] * tau_beta[0]);
         }
@@ -484,18 +485,20 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
       if(unlink){
         for(int k = 0; k < p_int; k++) {
           sum_scaled_sq_betas += (beta_int[k] * beta_int[k]) / safe_var(tau_beta[p_mod + regularize_ATE + k] * tau_beta[p_mod + regularize_ATE + k]);
+          shape += 0.5;
         } 
-      } else {
+      } else if (sample_global_prior != "hybrid" && sample_global_prior != "hc-hs") {
         for(size_t k = 0; k < int_pairs.size(); ++k) {
           double var_k = tau_int * tau_beta[regularize_ATE + int_pairs[k].first] * tau_beta[regularize_ATE + int_pairs[k].second];
           sum_scaled_sq_betas += (beta_int[k] * beta_int[k]) / safe_var(var_k);
         }
       } 
       int num_params_for_tau_glob = p_int;
-      if (sample_global_prior != "hybrid") {
+      if (sample_global_prior != "hybrid" && sample_global_prior != "hc-hs") {
         num_params_for_tau_glob += p_mod + regularize_ATE;
       }
       double shape_tau_glob = (static_cast<double>(num_params_for_tau_glob) + 1.0) / 2.0;
+      if (sample_global_prior == "hc-hs") shape_tau_glob = shape;
       double rate_tau_glob = (1.0 / safe_var(xi)) + (1.0 / safe_var(2.0 * sigma2)) * sum_scaled_sq_betas;
       tau_glob = std::sqrt(safe_var(rinvgamma(shape_tau_glob, rate_tau_glob)));
       
@@ -542,7 +545,7 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
     // 2. Define prior variance matrix D (excluding sigma^2)
     Eigen::VectorXd D_diag(P_combined);
     for (int j = 0; j < p_mod + regularize_ATE; ++j) {
-      double tau_glob_main = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
+      double tau_glob_main = (sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") ? 1.0 : tau_glob;
       D_diag(j) = safe_var(tau_beta[j] * tau_beta[j] * tau_glob_main * tau_glob_main);
     }
     for (size_t k = 0; k < int_pairs.size(); ++k) {
@@ -808,11 +811,11 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_cpp_old(
       // Construct scaled design matrix X*
       Eigen::VectorXd scaling(P_combined);
       if(regularize_ATE) {
-        double tau_glob_main = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
+        double tau_glob_main = (sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") ? 1.0 : tau_glob;
         scaling(0) = tau_beta[0] * tau_glob_main;
       }
       for (int j = 0; j < p_mod; ++j) {
-        double tau_glob_main = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
+        double tau_glob_main = (sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") ? 1.0 : tau_glob;
         scaling(j + regularize_ATE) = tau_beta[j + regularize_ATE] * tau_glob_main;
       }
       for (int k = 0; k < p_int; ++k) {
@@ -856,11 +859,11 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_cpp_old(
       // Step A: Calculate X*tX* and X*t_y
       Eigen::VectorXd scaling(P_combined);
       if(regularize_ATE) {
-        double tau_glob_main = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
+        double tau_glob_main = (sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") ? 1.0 : tau_glob;
         scaling(0) = tau_beta[0] * tau_glob_main;
       }
       for (int j = 0; j < p_mod; ++j) {
-        double tau_glob_main = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
+        double tau_glob_main = (sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") ? 1.0 : tau_glob;
         scaling(j + regularize_ATE) = tau_beta[j + regularize_ATE] * tau_glob_main;
       }
       for (int k = 0; k < p_int; ++k) {
@@ -916,11 +919,11 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_cpp_old(
     // 4. Recalculate *real* coefficients and residual
     // (This step is vital before sampling taus)
     if(regularize_ATE) {
-      double tau_glob_main = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
+      double tau_glob_main = (sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") ? 1.0 : tau_glob;
       alpha_current = alpha_tilde * tau_beta[0] * tau_glob_main * sigma;
     }
     for (int j = 0; j < p_mod; ++j) {
-      double tau_glob_main = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
+      double tau_glob_main = (sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") ? 1.0 : tau_glob;
       beta_current(j) = beta_tilde_map(j) * tau_beta[j + regularize_ATE] * tau_glob_main * sigma;
     }
     for (size_t k = 0; k < int_pairs.size(); ++k) {
@@ -959,7 +962,7 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_cpp_old(
           current_coeff = beta_current(j);
         }
         nu[j] = rinvgamma(1.0, 1.0 + 1.0 / safe_var(tau_beta[j]*tau_beta[j]));
-        double tau_glob_main = (sample_global_prior == "hybrid") ? 1.0 : tau_glob;
+        double tau_glob_main = (sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") ? 1.0 : tau_glob;
         tau_beta[j] = std::sqrt(safe_var(rinvgamma(1.0, (1.0 / safe_var(nu[j])) + (current_coeff * current_coeff) / safe_var(2.0 * tau_glob_main * tau_glob_main * sigma * sigma))));
       }
       
@@ -980,8 +983,9 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_cpp_old(
     if (sample_global_prior == "half-cauchy" || sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") {
       xi = rinvgamma(1.0, 1.0 + 1.0 / safe_var(tau_glob*tau_glob));
       double sum_scaled_sq_betas = 0.0;
+      double shape = 1.0 / 2.0;
       
-      if (sample_global_prior != "hybrid") {
+      if (sample_global_prior != "hybrid" && sample_global_prior != "hc-hs") {
         if(regularize_ATE){
           sum_scaled_sq_betas += (alpha_current * alpha_current) / safe_var(tau_beta[0] * tau_beta[0]);
         }
@@ -993,15 +997,16 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_cpp_old(
       if(unlink){
         for(int k = 0; k < p_int; k++) {
           sum_scaled_sq_betas += (beta_int_current(k) * beta_int_current(k)) / safe_var(tau_beta[p_mod + regularize_ATE + k] * tau_beta[p_mod + regularize_ATE + k]);
+          shape += 0.5;
         } 
-      } else {
+      } else if (sample_global_prior != "hybrid" && sample_global_prior != "hc-hs") {
         for(size_t k = 0; k < int_pairs.size(); ++k) {
           double var_k = tau_int * tau_beta[regularize_ATE + int_pairs[k].first] * tau_beta[regularize_ATE + int_pairs[k].second];
           sum_scaled_sq_betas += (beta_int_current(k) * beta_int_current(k)) / safe_var(var_k);
         }
       } 
       int num_params_for_tau_glob = p_int;
-      if (sample_global_prior != "hybrid") {
+      if (sample_global_prior != "hybrid" && sample_global_prior != "hc-hs") {
         num_params_for_tau_glob += p_mod + regularize_ATE;
       }
       double shape_tau_glob = (static_cast<double>(num_params_for_tau_glob) + 1.0) / 2.0;
