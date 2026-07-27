@@ -155,7 +155,7 @@ double logPosteriorTauGlob_amr(double tau_glob,
   
   double logPrior = 0.0;
   if (prior_type == "half-cauchy") {
-    logPrior = -safe_log(1.0 + tau_glob * tau_glob);
+    logPrior = -safe_log(prior_scale * prior_scale + tau_glob * tau_glob);
   } else if (prior_type == "half-normal") {
     logPrior = -(tau_glob * tau_glob) / (2.0 * prior_scale * prior_scale);
   } 
@@ -420,10 +420,16 @@ cpp11::writable::list updateLinearTreatmentCpp_amr(
     Eigen::VectorXd new_fit = X_design_map * full_beta_current;
     residual_map = y_target - new_fit;
     
-    // 5. Sample local shrinkage parameters tau_beta (and nu)
-    if (sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") {
+    // 5. Sample local shrinkage parameters tau_beta
+    // Prior logic:
+    // - "half-cauchy" / "half-normal": Standard horseshoe. tau_beta is sampled for all main effects (and interactions if unlinked).
+    // - "hc-hs": Main effects get standard local shrinkage (marginal Cauchy), interactions get global shrinkage.
+    // - "hybrid": Main effects are unpenalized (tau_beta fixed to 10.0). Interactions get global shrinkage.
+    // - "none": All tau_beta fixed to 10.0 (OLS / no shrinkage).
+    // Note: If unlink == false, interactions share the tau_beta of their component main effects.
+    if (sample_global_prior == "hybrid") {
       for(int j = 0; j < p_mod + regularize_ATE; j++){
-        tau_beta[j] = (sample_global_prior == "hybrid") ? 10.0 : 1.0;
+        tau_beta[j] = 10.0;
       }
       if(unlink){
         for(size_t k = 0; k < int_pairs.size(); k++){
@@ -432,7 +438,7 @@ cpp11::writable::list updateLinearTreatmentCpp_amr(
           tau_beta[full_idx] = std::sqrt(safe_var(rinvgamma_amr(1.0, (1.0 / safe_var(nu[full_idx])) + (beta_int[k] * beta_int[k]) / safe_var(2.0 * tau_glob * tau_glob * sigma2))));
         }
       }
-    } else if (sample_global_prior != "OLS") {
+    } else if (sample_global_prior != "none") {
       for(int j = 0; j < p_mod + regularize_ATE; j++){
         double current_coeff;
         if (regularize_ATE) {
@@ -440,8 +446,9 @@ cpp11::writable::list updateLinearTreatmentCpp_amr(
         } else {
           current_coeff = beta[j];
         }
+        double current_tau_glob = (sample_global_prior == "hc-hs") ? 1.0 : tau_glob;
         nu[j] = rinvgamma_amr(1.0, 1.0 + 1.0 / safe_var(tau_beta[j]*tau_beta[j]));
-        tau_beta[j] = std::sqrt(safe_var(rinvgamma_amr(1.0, (1.0 / safe_var(nu[j])) + (current_coeff * current_coeff) / safe_var(2.0 * tau_glob * tau_glob * sigma2))));
+        tau_beta[j] = std::sqrt(safe_var(rinvgamma_amr(1.0, (1.0 / safe_var(nu[j])) + (current_coeff * current_coeff) / safe_var(2.0 * current_tau_glob * current_tau_glob * sigma2))));
       }
       
       if(unlink){
@@ -457,8 +464,12 @@ cpp11::writable::list updateLinearTreatmentCpp_amr(
     }
     
     // 6. Sample global shrinkage parameter tau_glob
+    // Prior logic:
+    // - "hc-hs" / "hybrid": tau_glob applies ONLY to interactions. The sum of scaled squares skips main effects.
+    // - "half-cauchy" / "half-normal": tau_glob applies to all effects. Sum of scaled squares includes main effects.
+    // - "none": tau_glob is fixed to 1.0.
     if (sample_global_prior == "half-cauchy" || sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") {
-      xi = rinvgamma_amr(1.0, 1.0 + 1.0 / safe_var(tau_glob*tau_glob));
+      xi = rinvgamma_amr(1.0, 1.0 / safe_var(hn_scale * hn_scale) + 1.0 / safe_var(tau_glob*tau_glob));
       double sum_scaled_sq_betas = 0.0;
       double shape_tau_glob = 1.0 / 2.0;
       
@@ -478,7 +489,7 @@ cpp11::writable::list updateLinearTreatmentCpp_amr(
           sum_scaled_sq_betas += (beta_int[k] * beta_int[k]) / safe_var(tau_beta[p_mod + regularize_ATE + k] * tau_beta[p_mod + regularize_ATE + k]);
           shape_tau_glob += 0.5;
         } 
-      } else if (sample_global_prior != "hybrid" && sample_global_prior != "hc-hs") {
+      } else {
         for(size_t k = 0; k < int_pairs.size(); ++k) {
           double var_k = tau_int * tau_beta[regularize_ATE + int_pairs[k].first] * tau_beta[regularize_ATE + int_pairs[k].second];
           sum_scaled_sq_betas += (beta_int[k] * beta_int[k]) / safe_var(var_k);
@@ -592,8 +603,12 @@ cpp11::writable::list updateLinearTreatmentCpp_amr(
       }
       
       bool current_unlink = regularize_ATE ? true : unlink;
-      if (sample_global_prior != "OLS") {
-        double tb_j_new = sample_tau_j_slice_amr(tau_beta[j], current_coeff, j, beta_int_std, tau_beta_std, int_pairs, 1.0, sigma, tau_glob, current_unlink, step_out, max_steps);
+      if (sample_global_prior == "hybrid") {
+        tau_beta[j] = 10.0;
+        tau_beta_std[j] = 10.0;
+      } else if (sample_global_prior != "none") {
+        double current_tau_glob = (sample_global_prior == "hc-hs") ? 1.0 : tau_glob;
+        double tb_j_new = sample_tau_j_slice_amr(tau_beta[j], current_coeff, j, beta_int_std, tau_beta_std, int_pairs, 1.0, sigma, current_tau_glob, current_unlink, step_out, max_steps);
         tau_beta[j] = tb_j_new;
         tau_beta_std[j] = tb_j_new;
       } else {
@@ -605,7 +620,7 @@ cpp11::writable::list updateLinearTreatmentCpp_amr(
     if (unlink) {
       for (size_t k = 0; k < int_pairs.size(); k++) {
         int full_idx = p_mod + k + regularize_ATE;
-        if (sample_global_prior != "OLS") {
+        if (sample_global_prior != "none") {
           double tb_k_new = sample_tau_j_slice_amr(tau_beta[full_idx], beta_int[k], full_idx, beta_int_std, tau_beta_std, int_pairs, 1.0, sigma, tau_glob, unlink, step_out, max_steps);
           tau_beta[full_idx] = tb_k_new;
           tau_beta_std[full_idx] = tb_k_new;
@@ -616,9 +631,9 @@ cpp11::writable::list updateLinearTreatmentCpp_amr(
       }
     }
     
-    if (sample_global_prior == "OLS") tau_glob = 1.0;
+    if (sample_global_prior == "none") tau_glob = 1.0;
     
-    if (sample_global_prior != "none" && sample_global_prior != "OLS") {
+    if (sample_global_prior != "none") {
       std::vector<double> beta_std_current(beta.begin(), beta.end());
       if(regularize_ATE){
         beta_std_current.insert(beta_std_current.begin(), alpha);
@@ -906,10 +921,16 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_amr(
     Eigen::VectorXd new_fit = X_design_map * full_beta_current;
     residual_map = y_target - new_fit;
     
-    // 5. Sample local shrinkage parameters tau_beta (and nu)
-    if (sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") {
+    // 5. Sample local shrinkage parameters tau_beta
+    // Prior logic:
+    // - "half-cauchy" / "half-normal": Standard horseshoe. tau_beta is sampled for all main effects (and interactions if unlinked).
+    // - "hc-hs": Main effects get standard local shrinkage (marginal Cauchy), interactions get global shrinkage.
+    // - "hybrid": Main effects are unpenalized (tau_beta fixed to 10.0). Interactions get global shrinkage.
+    // - "none": All tau_beta fixed to 10.0 (OLS / no shrinkage).
+    // Note: If unlink == false, interactions share the tau_beta of their component main effects.
+    if (sample_global_prior == "hybrid") {
       for(int j = 0; j < p_mod + regularize_ATE; j++){
-        tau_beta[j] = (sample_global_prior == "hybrid") ? 10.0 : 1.0;
+        tau_beta[j] = 10.0;
       }
       if(unlink){
         for(size_t k = 0; k < int_pairs.size(); k++){
@@ -918,7 +939,7 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_amr(
           tau_beta[full_idx] = std::sqrt(safe_var(rinvgamma_amr(1.0, (1.0 / safe_var(nu[full_idx])) + (beta_int_current(k) * beta_int_current(k)) / safe_var(2.0 * tau_glob * tau_glob * sigma * sigma))));
         }
       }
-    } else if (sample_global_prior != "OLS") {
+    } else if (sample_global_prior != "none") {
       for(int j = 0; j < p_mod + regularize_ATE; j++){
         double current_coeff;
         if (regularize_ATE) {
@@ -926,8 +947,9 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_amr(
         } else {
           current_coeff = beta_current(j);
         }
+        double current_tau_glob = (sample_global_prior == "hc-hs") ? 1.0 : tau_glob;
         nu[j] = rinvgamma_amr(1.0, 1.0 + 1.0 / safe_var(tau_beta[j]*tau_beta[j]));
-        tau_beta[j] = std::sqrt(safe_var(rinvgamma_amr(1.0, (1.0 / safe_var(nu[j])) + (current_coeff * current_coeff) / safe_var(2.0 * tau_glob * tau_glob * sigma * sigma))));
+        tau_beta[j] = std::sqrt(safe_var(rinvgamma_amr(1.0, (1.0 / safe_var(nu[j])) + (current_coeff * current_coeff) / safe_var(2.0 * current_tau_glob * current_tau_glob * sigma * sigma))));
       }
       
       if(unlink){
@@ -944,8 +966,12 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_amr(
     
     // 6. Sample global shrinkage parameter tau_glob
     // *** THIS IS THE KEY NCP STEP: sigma2 IS REMOVED ***
+    // Prior logic:
+    // - "hc-hs" / "hybrid": tau_glob applies ONLY to interactions. The sum of scaled squares skips main effects.
+    // - "half-cauchy" / "half-normal": tau_glob applies to all effects. Sum of scaled squares includes main effects.
+    // - "none": tau_glob is fixed to 1.0.
     if (sample_global_prior == "half-cauchy" || sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") {
-      xi = rinvgamma_amr(1.0, 1.0 + 1.0 / safe_var(tau_glob*tau_glob));
+      xi = rinvgamma_amr(1.0, 1.0 / safe_var(hn_scale * hn_scale) + 1.0 / safe_var(tau_glob*tau_glob));
       double sum_scaled_sq_betas = 0.0;
       double shape_tau_glob = 1.0 / 2.0;
       
@@ -965,7 +991,7 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_amr(
           sum_scaled_sq_betas += (beta_int_current(k) * beta_int_current(k)) / safe_var(tau_beta[p_mod + regularize_ATE + k] * tau_beta[p_mod + regularize_ATE + k]);
           shape_tau_glob += 0.5;
         } 
-      } else if (sample_global_prior != "hybrid" && sample_global_prior != "hc-hs") {
+      } else {
         for(size_t k = 0; k < int_pairs.size(); ++k) {
           double var_k = tau_int * tau_beta[regularize_ATE + int_pairs[k].first] * tau_beta[regularize_ATE + int_pairs[k].second];
           sum_scaled_sq_betas += (beta_int_current(k) * beta_int_current(k)) / safe_var(var_k);

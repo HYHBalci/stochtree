@@ -93,7 +93,7 @@ double sample_alpha_cpp(const cpp11::writable::doubles& r_alpha, const cpp11::do
 // SECTION 2: SLICE SAMPLER HELPER FUNCTIONS (COMPLETE & VERIFIED)
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-double logPosteriorTauJ_old(double tau_j, double beta_j, int index, const std::vector<double>& beta_int, const std::vector<double>& tau, const std::vector<std::pair<int, int>>& int_pairs, double tau_int, double sigma, double tau_glob, bool unlink) {
+double logPosteriorTauJ_old(double tau_j, double beta_j, int index, const std::vector<double>& beta_int, const std::vector<double>& tau, const std::vector<std::pair<int, int>>& int_pairs, double tau_int, double sigma, double tau_glob, bool unlink, int regularize_ATE = 0) {
   if (tau_j <= 0.0) return -std::numeric_limits<double>::infinity();
   
   double logPrior = std::log(2.0 / M_PI) - safe_log(1.0 + tau_j * tau_j);
@@ -108,14 +108,13 @@ double logPosteriorTauJ_old(double tau_j, double beta_j, int index, const std::v
       int iVar = int_pairs[m].first;
       int jVar = int_pairs[m].second;
       int target_idx = -1;
-      if (iVar == index) target_idx = jVar;
-      else if (jVar == index) target_idx = iVar;
+      if (iVar + regularize_ATE == index) target_idx = jVar;
+      else if (jVar + regularize_ATE == index) target_idx = iVar;
       
       if (target_idx != -1) {
         double beta_jk = beta_int[m];
-        double var_jk = (target_idx == index) ?
-        safe_var(sigma2 * tau_j * tau_j * (tau_glob * tau_glob) * tau_int) :
-          safe_var(sigma2 * tau_j * tau[target_idx] * (tau_glob * tau_glob) * tau_int);
+        double tau_target = tau[target_idx + regularize_ATE];
+        double var_jk = safe_var(sigma2 * (tau_j * tau_j) * (tau_target * tau_target) * (tau_glob * tau_glob) * tau_int);
         logLikInter += -0.5 * (log2pi + safe_log(var_jk)) - 0.5 * (beta_jk * beta_jk / var_jk);
       }
     }
@@ -123,8 +122,8 @@ double logPosteriorTauJ_old(double tau_j, double beta_j, int index, const std::v
   return logPrior + logLikMain + logLikInter;
 } 
 
-double sample_tau_j_slice_old(double tau_old, double beta_j, int index, const std::vector<double>& beta_int, const std::vector<double>& tau, const std::vector<std::pair<int, int>>& int_pairs, double tau_int, double sigma, double tau_glob, bool unlink, double step_out, int max_steps) {
-  double logP_old = logPosteriorTauJ_old(tau_old, beta_j, index, beta_int, tau, int_pairs, tau_int, sigma, tau_glob, unlink);
+double sample_tau_j_slice_old(double tau_old, double beta_j, int index, const std::vector<double>& beta_int, const std::vector<double>& tau, const std::vector<std::pair<int, int>>& int_pairs, double tau_int, double sigma, double tau_glob, bool unlink, double step_out, int max_steps, int regularize_ATE = 0) {
+  double logP_old = logPosteriorTauJ_old(tau_old, beta_j, index, beta_int, tau, int_pairs, tau_int, sigma, tau_glob, unlink, regularize_ATE);
   if (is_invalid(logP_old)) return tau_old;
   
   double y_slice = logP_old - Rf_rexp(1.0);
@@ -132,17 +131,17 @@ double sample_tau_j_slice_old(double tau_old, double beta_j, int index, const st
   double R = tau_old + step_out;
   
   for (int s = 0; s < max_steps; ++s) {
-    if (L <= 1e-6 || logPosteriorTauJ_old(L, beta_j, index, beta_int, tau, int_pairs, tau_int, sigma, tau_glob, unlink) <= y_slice) break;
+    if (L <= 1e-6 || logPosteriorTauJ_old(L, beta_j, index, beta_int, tau, int_pairs, tau_int, sigma, tau_glob, unlink, regularize_ATE) <= y_slice) break;
     L = std::max(1e-6, L - step_out);
   } 
   for (int s = 0; s < max_steps; ++s) {
-    if (logPosteriorTauJ_old(R, beta_j, index, beta_int, tau, int_pairs, tau_int, sigma, tau_glob, unlink) <= y_slice) break;
+    if (logPosteriorTauJ_old(R, beta_j, index, beta_int, tau, int_pairs, tau_int, sigma, tau_glob, unlink, regularize_ATE) <= y_slice) break;
     R += step_out;
   } 
   
   for (int rep = 0; rep < max_steps; rep++) {
     double prop = Rf_runif(L, R);
-    if (logPosteriorTauJ_old(prop, beta_j, index, beta_int, tau, int_pairs, tau_int, sigma, tau_glob, unlink) > y_slice) return prop;
+    if (logPosteriorTauJ_old(prop, beta_j, index, beta_int, tau, int_pairs, tau_int, sigma, tau_glob, unlink, regularize_ATE) > y_slice) return prop;
     if (prop < tau_old) L = prop; else R = prop;
   } 
   return tau_old;
@@ -157,13 +156,14 @@ double logPosteriorTauGlob_old(double tau_glob,
                            double sigma, 
                            bool unlink,
                            const std::string& prior_type,
-                           double prior_scale = 1.0) {    
+                           double prior_scale = 1.0,
+                           int regularize_ATE = 0) {    
   
   if (tau_glob <= 0.0) return -std::numeric_limits<double>::infinity();
   
   double logPrior = 0.0;
   if (prior_type == "half-cauchy") {
-    logPrior = -safe_log(1.0 + tau_glob * tau_glob);
+    logPrior = -safe_log(prior_scale * prior_scale + tau_glob * tau_glob);
   } else if (prior_type == "half-normal") {
     logPrior = -(tau_glob * tau_glob) / (2.0 * prior_scale * prior_scale);
   } 
@@ -181,7 +181,7 @@ double logPosteriorTauGlob_old(double tau_glob,
   for (size_t m = 0; m < int_pairs.size(); m++) {
     double var_jk = unlink ?
     safe_var(sigma2 * (tau[betas.size() + m] * tau[betas.size() + m]) * (tau_glob * tau_glob)) : 
-    safe_var(sigma2 * (tau[int_pairs[m].first] * tau[int_pairs[m].second]) * (tau_glob * tau_glob) * tau_int);
+    safe_var(sigma2 * (tau[int_pairs[m].first + regularize_ATE] * tau[int_pairs[m].first + regularize_ATE]) * (tau[int_pairs[m].second + regularize_ATE] * tau[int_pairs[m].second + regularize_ATE]) * (tau_glob * tau_glob) * tau_int);
     logLik += -0.5 * (log2pi + safe_log(var_jk)) - 0.5 * (beta_int[m] * beta_int[m] / var_jk);
   } 
   
@@ -199,11 +199,12 @@ double sample_tau_global_slice_old(double tau_old,
                                double step_out, 
                                int max_steps,
                                const std::string& prior_type, 
-                               double prior_scale = 1.0) {   
+                               double prior_scale = 1.0,
+                               int regularize_ATE = 0) {   
   auto logPost = [&](double t_g) {
     return logPosteriorTauGlob_old(t_g, beta, beta_int, tau, int_pairs, 
                                tau_int, sigma, unlink, 
-                               prior_type, prior_scale);
+                               prior_type, prior_scale, regularize_ATE);
   }; 
   
   double logP_old = logPost(tau_old);
@@ -322,9 +323,11 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
       D_diag(j) = safe_var(tau_beta[j] * tau_beta[j] * tau_glob_main * tau_glob_main);
     }
     for (size_t k = 0; k < int_pairs.size(); ++k) {
+      double tb_first = tau_beta[int_pairs[k].first + regularize_ATE];
+      double tb_second = tau_beta[int_pairs[k].second + regularize_ATE];
       double V_k_star = unlink ?
       (tau_beta[p_mod + regularize_ATE + k] * tau_beta[p_mod + regularize_ATE + k] * tau_glob * tau_glob) :
-      (tau_int * tau_beta[int_pairs[k].first + regularize_ATE] * tau_beta[int_pairs[k].second + regularize_ATE] * tau_glob * tau_glob);
+      (tau_int * (tb_first * tb_first) * (tb_second * tb_second) * tau_glob * tau_glob);
       D_diag(p_mod + regularize_ATE + k) = safe_var(V_k_star);
     }
     Eigen::MatrixXd D_mat = D_diag.asDiagonal();
@@ -431,10 +434,16 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
     Eigen::VectorXd new_fit = X_design_map * full_beta_current;
     residual_map = y_target - new_fit;
     
-    // 5. Sample local shrinkage parameters tau_beta (and nu)
-    if (sample_global_prior == "hc-hs") {
+    // 4. Sample local shrinkage parameters tau_beta
+    // Prior logic:
+    // - "half-cauchy" / "half-normal": Standard horseshoe. tau_beta is sampled for all main effects (and interactions if unlinked).
+    // - "hc-hs": Main effects get standard local shrinkage (marginal Cauchy), interactions get global shrinkage.
+    // - "hybrid": Main effects are unpenalized (tau_beta fixed to 10.0). Interactions get global shrinkage.
+    // - "none": All tau_beta fixed to 10.0 (OLS / no shrinkage).
+    // Note: If unlink == false, interactions share the tau_beta of their component main effects.
+    if (sample_global_prior == "hybrid") {
       for(int j = 0; j < p_mod + regularize_ATE; j++){
-        tau_beta[j] = 1.0;
+        tau_beta[j] = 10.0;
       }
       if(unlink){
         for(size_t k = 0; k < int_pairs.size(); k++){
@@ -443,7 +452,7 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
           tau_beta[full_idx] = std::sqrt(safe_var(rinvgamma(1.0, (1.0 / safe_var(nu[full_idx])) + (beta_int[k] * beta_int[k]) / safe_var(2.0 * tau_glob * tau_glob * sigma2))));
         }
       }
-    } else if (sample_global_prior != "OLS") {
+    } else if (sample_global_prior != "none") {
       for(int j = 0; j < p_mod + regularize_ATE; j++){
         double current_coeff;
         if (regularize_ATE) {
@@ -451,9 +460,29 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
         } else {
           current_coeff = beta[j];
         }
+        double current_tau_glob = (sample_global_prior == "hc-hs") ? 1.0 : tau_glob;
         nu[j] = rinvgamma(1.0, 1.0 + 1.0 / safe_var(tau_beta[j]*tau_beta[j]));
-        double tau_glob_main = (sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") ? 1.0 : tau_glob;
-        tau_beta[j] = std::sqrt(safe_var(rinvgamma(1.0, (1.0 / safe_var(nu[j])) + (current_coeff * current_coeff) / safe_var(2.0 * tau_glob_main * tau_glob_main * sigma2))));
+        
+        double shape_tau = 1.0; 
+        double rate_tau = (1.0 / safe_var(nu[j])) + (current_coeff * current_coeff) / safe_var(2.0 * current_tau_glob * current_tau_glob * sigma2);
+        
+        if (!unlink) {
+          for (size_t k = 0; k < int_pairs.size(); ++k) {
+            int iVar = int_pairs[k].first + regularize_ATE;
+            int jVar = int_pairs[k].second + regularize_ATE;
+            int target_idx = -1;
+            if (iVar == j) target_idx = jVar;
+            else if (jVar == j) target_idx = iVar;
+            
+            if (target_idx != -1) {
+              double tb_other = tau_beta[target_idx];
+              double var_k_other = tau_int * (tb_other * tb_other) * (tau_glob * tau_glob) * sigma2;
+              rate_tau += (beta_int[k] * beta_int[k]) / safe_var(2.0 * var_k_other);
+              shape_tau += 0.5;
+            }
+          }
+        }
+        tau_beta[j] = std::sqrt(safe_var(rinvgamma(shape_tau, rate_tau)));
       }
       
       if(unlink){
@@ -469,36 +498,41 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
     }
     
     // 6. Sample global shrinkage parameter tau_glob
+    // Prior logic:
+    // - "hc-hs" / "hybrid": tau_glob applies ONLY to interactions. The sum of scaled squares skips main effects.
+    // - "half-cauchy" / "half-normal": tau_glob applies to all effects. Sum of scaled squares includes main effects.
+    // - "none": tau_glob is fixed to 1.0.
     if (sample_global_prior == "half-cauchy" || sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") {
-      xi = rinvgamma(1.0, 1.0 + 1.0 / safe_var(tau_glob*tau_glob));
+      xi = rinvgamma(1.0, 1.0 / safe_var(hn_scale * hn_scale) + 1.0 / safe_var(tau_glob*tau_glob));
       double sum_scaled_sq_betas = 0.0;
-      double shape = 1.0 / 2.0;
+      double shape_tau_glob = 1.0 / 2.0;
+      
       if (sample_global_prior != "hybrid" && sample_global_prior != "hc-hs") {
         if(regularize_ATE){
           sum_scaled_sq_betas += (alpha*alpha) / safe_var(tau_beta[0] * tau_beta[0]);
+          shape_tau_glob += 0.5;
         }
         for(int j = 0; j < p_mod; j++) {
           sum_scaled_sq_betas += (beta[j]*beta[j]) / safe_var(tau_beta[j + regularize_ATE] * tau_beta[j + regularize_ATE]);
+          shape_tau_glob += 0.5;
         }
       } 
       
       if(unlink){
         for(int k = 0; k < p_int; k++) {
           sum_scaled_sq_betas += (beta_int[k] * beta_int[k]) / safe_var(tau_beta[p_mod + regularize_ATE + k] * tau_beta[p_mod + regularize_ATE + k]);
-          shape += 0.5;
+          shape_tau_glob += 0.5;
         } 
-      } else if (sample_global_prior != "hybrid" && sample_global_prior != "hc-hs") {
+      } else {
         for(size_t k = 0; k < int_pairs.size(); ++k) {
-          double var_k = tau_int * tau_beta[regularize_ATE + int_pairs[k].first] * tau_beta[regularize_ATE + int_pairs[k].second];
+          double tb_first = tau_beta[regularize_ATE + int_pairs[k].first];
+          double tb_second = tau_beta[regularize_ATE + int_pairs[k].second];
+          double var_k = tau_int * (tb_first * tb_first) * (tb_second * tb_second);
           sum_scaled_sq_betas += (beta_int[k] * beta_int[k]) / safe_var(var_k);
+          shape_tau_glob += 0.5;
         }
       } 
-      int num_params_for_tau_glob = p_int;
-      if (sample_global_prior != "hybrid" && sample_global_prior != "hc-hs") {
-        num_params_for_tau_glob += p_mod + regularize_ATE;
-      }
-      double shape_tau_glob = (static_cast<double>(num_params_for_tau_glob) + 1.0) / 2.0;
-      if (sample_global_prior == "hc-hs") shape_tau_glob = shape;
+      
       double rate_tau_glob = (1.0 / safe_var(xi)) + (1.0 / safe_var(2.0 * sigma2)) * sum_scaled_sq_betas;
       tau_glob = std::sqrt(safe_var(rinvgamma(shape_tau_glob, rate_tau_glob)));
       
@@ -523,7 +557,8 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
         step_out, 
         max_steps,
         "half-normal", 
-        hn_scale        
+        hn_scale,
+        regularize_ATE ? 1 : 0
       );    
     } 
     
@@ -549,9 +584,11 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
       D_diag(j) = safe_var(tau_beta[j] * tau_beta[j] * tau_glob_main * tau_glob_main);
     }
     for (size_t k = 0; k < int_pairs.size(); ++k) {
+      double tb_first = tau_beta[regularize_ATE + int_pairs[k].first];
+      double tb_second = tau_beta[regularize_ATE + int_pairs[k].second];
       double V_k_star = unlink ?
       (tau_beta[regularize_ATE + p_mod + k] * tau_beta[regularize_ATE + p_mod + k] * tau_glob * tau_glob) :
-      (1.0 * tau_beta[regularize_ATE + int_pairs[k].first] * tau_beta[regularize_ATE + int_pairs[k].second] * tau_glob * tau_glob);
+      (tau_int * (tb_first * tb_first) * (tb_second * tb_second) * tau_glob * tau_glob);
       D_diag(regularize_ATE + p_mod + k) = safe_var(V_k_star);
     }
     
@@ -597,7 +634,11 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
     Eigen::VectorXd new_fit = X_design_map * full_beta_current;
     residual_map = y_target - new_fit;
     
-    // 6. Sample tau_beta using slice sampler, now conditional on the new block of betas
+    // 6. Sample local shrinkage parameters tau_beta using slice sampler
+    // Prior logic:
+    // - "half-cauchy" / "half-normal": Standard horseshoe slice sampler.
+    // - "hc-hs": Main effects get slice sampler for local shrinkage, but current_tau_glob = 1.0.
+    // - "hybrid" / "none": Main effects are unpenalized (tau_beta fixed to 10.0).
     std::vector<double> beta_int_std(beta_int.begin(), beta_int.end());
     std::vector<double> tau_beta_std(tau_beta.begin(), tau_beta.end());
     
@@ -609,12 +650,12 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
         current_coeff = beta[j];
       }
       
-      bool current_unlink = regularize_ATE ? true : unlink;
-      if (sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") {
-        tau_beta[j] = 1.0;
-        tau_beta_std[j] = 1.0;
-      } else if (sample_global_prior != "OLS") {
-        double tb_j_new = sample_tau_j_slice_old(tau_beta[j], current_coeff, j, beta_int_std, tau_beta_std, int_pairs, 1.0, sigma, tau_glob, current_unlink, step_out, max_steps);
+      if (sample_global_prior == "hybrid") {
+        tau_beta[j] = 10.0;
+        tau_beta_std[j] = 10.0;
+      } else if (sample_global_prior != "none") {
+        double current_tau_glob = (sample_global_prior == "hc-hs") ? 1.0 : tau_glob;
+        double tb_j_new = sample_tau_j_slice_old(tau_beta[j], current_coeff, j, beta_int_std, tau_beta_std, int_pairs, 1.0, sigma, current_tau_glob, unlink, step_out, max_steps, regularize_ATE ? 1 : 0);
         tau_beta[j] = tb_j_new;
         tau_beta_std[j] = tb_j_new;
       } else {
@@ -626,8 +667,8 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
     if (unlink) {
       for (size_t k = 0; k < int_pairs.size(); k++) {
         int full_idx = p_mod + k + regularize_ATE;
-        if (sample_global_prior != "OLS") {
-          double tb_k_new = sample_tau_j_slice_old(tau_beta[full_idx], beta_int[k], full_idx, beta_int_std, tau_beta_std, int_pairs, 1.0, sigma, tau_glob, unlink, step_out, max_steps);
+        if (sample_global_prior != "none") {
+          double tb_k_new = sample_tau_j_slice_old(tau_beta[full_idx], beta_int[k], full_idx, beta_int_std, tau_beta_std, int_pairs, 1.0, sigma, tau_glob, unlink, step_out, max_steps, regularize_ATE ? 1 : 0);
           tau_beta[full_idx] = tb_k_new;
           tau_beta_std[full_idx] = tb_k_new;
         } else {
@@ -637,9 +678,9 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
       }
     }
     
-    if (sample_global_prior == "OLS") tau_glob = 1.0;
+    if (sample_global_prior == "none") tau_glob = 1.0;
     
-    if (sample_global_prior != "none" && sample_global_prior != "OLS") {
+    if (sample_global_prior != "none") {
       std::vector<double> beta_std_current(beta.begin(), beta.end());
       if(regularize_ATE){
         beta_std_current.insert(beta_std_current.begin(), alpha);
@@ -657,7 +698,8 @@ cpp11::writable::list updateLinearTreatmentCpp_cpp_old(
         step_out, 
         max_steps,
         sample_global_prior, 
-        hn_scale            
+        hn_scale,
+        regularize_ATE ? 1 : 0
       ); 
     }}
   
@@ -762,10 +804,12 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_cpp_old(
   double alpha_current = alpha_tilde; // Will be overwritten if regularize_ATE=true
   
   if(regularize_ATE) {
-    alpha_current = alpha_tilde * tau_beta[0] * tau_glob * sigma;
+    double tau_glob_main = (sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") ? 1.0 : tau_glob;
+    alpha_current = alpha_tilde * tau_beta[0] * tau_glob_main * sigma;
   }
   for (int j = 0; j < p_mod; ++j) {
-    beta_current(j) = beta_tilde_map(j) * tau_beta[j + regularize_ATE] * tau_glob * sigma;
+    double tau_glob_main = (sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") ? 1.0 : tau_glob;
+    beta_current(j) = beta_tilde_map(j) * tau_beta[j + regularize_ATE] * tau_glob_main * sigma;
   }
   for (size_t k = 0; k < int_pairs.size(); ++k) {
     double V_k_star_tau_only = unlink ?
@@ -935,16 +979,19 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_cpp_old(
     
     if(regularize_ATE) full_beta_current(0) = alpha_current;
     for(int j=0; j<p_mod; ++j) full_beta_current(j + regularize_ATE) = beta_current(j);
-    for(int k=0; k<p_int; ++k) full_beta_current(p_mod + regularize_ATE + k) = beta_int_current(k);
-    
     Eigen::VectorXd new_fit = X_design_map * full_beta_current;
     residual_map = y_target - new_fit;
     
-    // 5. Sample local shrinkage parameters tau_beta (and nu)
-    // *** THIS IS THE KEY NCP STEP: sigma2 IS REMOVED ***
-    if (sample_global_prior == "hc-hs") {
+    // 5. Sample local shrinkage parameters tau_beta
+    // Prior logic:
+    // - "half-cauchy" / "half-normal": Standard horseshoe. tau_beta is sampled for all main effects (and interactions if unlinked).
+    // - "hc-hs": Main effects get standard local shrinkage (marginal Cauchy), interactions get global shrinkage.
+    // - "hybrid": Main effects are unpenalized (tau_beta fixed to 10.0). Interactions get global shrinkage.
+    // - "none": All tau_beta fixed to 10.0 (OLS / no shrinkage).
+    // Note: If unlink == false, interactions share the tau_beta of their component main effects.
+    if (sample_global_prior == "hybrid") {
       for(int j = 0; j < p_mod + regularize_ATE; j++){
-        tau_beta[j] = 1.0;
+        tau_beta[j] = 10.0;
       }
       if(unlink){
         for(size_t k = 0; k < int_pairs.size(); k++){
@@ -953,7 +1000,7 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_cpp_old(
           tau_beta[full_idx] = std::sqrt(safe_var(rinvgamma(1.0, (1.0 / safe_var(nu[full_idx])) + (beta_int_current(k) * beta_int_current(k)) / safe_var(2.0 * tau_glob * tau_glob * sigma * sigma))));
         }
       }
-    } else if (sample_global_prior != "OLS") {
+    } else if (sample_global_prior != "none") {
       for(int j = 0; j < p_mod + regularize_ATE; j++){
         double current_coeff;
         if (regularize_ATE) {
@@ -961,9 +1008,29 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_cpp_old(
         } else {
           current_coeff = beta_current(j);
         }
+        double current_tau_glob = (sample_global_prior == "hc-hs") ? 1.0 : tau_glob;
         nu[j] = rinvgamma(1.0, 1.0 + 1.0 / safe_var(tau_beta[j]*tau_beta[j]));
-        double tau_glob_main = (sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") ? 1.0 : tau_glob;
-        tau_beta[j] = std::sqrt(safe_var(rinvgamma(1.0, (1.0 / safe_var(nu[j])) + (current_coeff * current_coeff) / safe_var(2.0 * tau_glob_main * tau_glob_main * sigma * sigma))));
+        
+        double shape_tau = 1.0; 
+        double rate_tau = (1.0 / safe_var(nu[j])) + (current_coeff * current_coeff) / safe_var(2.0 * current_tau_glob * current_tau_glob * sigma * sigma);
+        
+        if (!unlink) {
+          for (size_t k = 0; k < int_pairs.size(); ++k) {
+            int iVar = int_pairs[k].first + regularize_ATE;
+            int jVar = int_pairs[k].second + regularize_ATE;
+            int target_idx = -1;
+            if (iVar == j) target_idx = jVar;
+            else if (jVar == j) target_idx = iVar;
+            
+            if (target_idx != -1) {
+              double tb_other = tau_beta[target_idx];
+              double var_k_other = tau_int * (tb_other * tb_other) * (tau_glob * tau_glob) * sigma * sigma;
+              rate_tau += (beta_int_current(k) * beta_int_current(k)) / safe_var(2.0 * var_k_other);
+              shape_tau += 0.5;
+            }
+          }
+        }
+        tau_beta[j] = std::sqrt(safe_var(rinvgamma(shape_tau, rate_tau)));
       }
       
       if(unlink){
@@ -980,36 +1047,41 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_cpp_old(
     
     // 6. Sample global shrinkage parameter tau_glob
     // *** THIS IS THE KEY NCP STEP: sigma2 IS REMOVED ***
+    // Prior logic:
+    // - "hc-hs" / "hybrid": tau_glob applies ONLY to interactions. The sum of scaled squares skips main effects.
+    // - "half-cauchy" / "half-normal": tau_glob applies to all effects. Sum of scaled squares includes main effects.
+    // - "none": tau_glob is fixed to 1.0.
     if (sample_global_prior == "half-cauchy" || sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") {
-      xi = rinvgamma(1.0, 1.0 + 1.0 / safe_var(tau_glob*tau_glob));
+      xi = rinvgamma(1.0, 1.0 / safe_var(hn_scale * hn_scale) + 1.0 / safe_var(tau_glob*tau_glob));
       double sum_scaled_sq_betas = 0.0;
-      double shape = 1.0 / 2.0;
+      double shape_tau_glob = 1.0 / 2.0;
       
       if (sample_global_prior != "hybrid" && sample_global_prior != "hc-hs") {
         if(regularize_ATE){
           sum_scaled_sq_betas += (alpha_current * alpha_current) / safe_var(tau_beta[0] * tau_beta[0]);
+          shape_tau_glob += 0.5;
         }
         for(int j = 0; j < p_mod; j++) {
           sum_scaled_sq_betas += (beta_current(j) * beta_current(j)) / safe_var(tau_beta[j + regularize_ATE] * tau_beta[j + regularize_ATE]);
+          shape_tau_glob += 0.5;
         }
       } 
       
       if(unlink){
         for(int k = 0; k < p_int; k++) {
           sum_scaled_sq_betas += (beta_int_current(k) * beta_int_current(k)) / safe_var(tau_beta[p_mod + regularize_ATE + k] * tau_beta[p_mod + regularize_ATE + k]);
-          shape += 0.5;
+          shape_tau_glob += 0.5;
         } 
-      } else if (sample_global_prior != "hybrid" && sample_global_prior != "hc-hs") {
+      } else {
         for(size_t k = 0; k < int_pairs.size(); ++k) {
-          double var_k = tau_int * tau_beta[regularize_ATE + int_pairs[k].first] * tau_beta[regularize_ATE + int_pairs[k].second];
+          double tb_first = tau_beta[regularize_ATE + int_pairs[k].first];
+          double tb_second = tau_beta[regularize_ATE + int_pairs[k].second];
+          double var_k = tau_int * (tb_first * tb_first) * (tb_second * tb_second);
           sum_scaled_sq_betas += (beta_int_current(k) * beta_int_current(k)) / safe_var(var_k);
+          shape_tau_glob += 0.5;
         }
       } 
-      int num_params_for_tau_glob = p_int;
-      if (sample_global_prior != "hybrid" && sample_global_prior != "hc-hs") {
-        num_params_for_tau_glob += p_mod + regularize_ATE;
-      }
-      double shape_tau_glob = (static_cast<double>(num_params_for_tau_glob) + 1.0) / 2.0;
+      
       double rate_tau_glob = (1.0 / safe_var(xi)) + (1.0 / safe_var(2.0 * sigma * sigma)) * sum_scaled_sq_betas;
       tau_glob = std::sqrt(safe_var(rinvgamma(shape_tau_glob, rate_tau_glob)));
       
@@ -1041,6 +1113,23 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_cpp_old(
       cpp11::warning("NCP with Half-Normal prior (slice sampler) is not implemented. tau_glob not updated.");
     } 
     
+    // 7. Complete ASIS: Recalculate beta_tilde based on new tau_beta and tau_glob
+    if (sample_global_prior != "none") {
+      if(regularize_ATE) {
+        double tau_glob_main = (sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") ? 1.0 : tau_glob;
+        alpha_tilde = alpha_current / (tau_beta[0] * tau_glob_main * sigma);
+      }
+      for (int j = 0; j < p_mod; ++j) {
+        double tau_glob_main = (sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") ? 1.0 : tau_glob;
+        beta_tilde[j] = beta_current(j) / (tau_beta[j + regularize_ATE] * tau_glob_main * sigma);
+      }
+      for (size_t k = 0; k < int_pairs.size(); ++k) {
+        double V_k_star_tau_only = unlink ?
+        (tau_beta[p_mod + regularize_ATE + k]) :
+        (std::sqrt(tau_int) * tau_beta[int_pairs[k].first + regularize_ATE] * tau_beta[int_pairs[k].second + regularize_ATE]);
+        beta_int_tilde[k] = beta_int_current(k) / (V_k_star_tau_only * tau_glob * sigma);
+      }
+    }
   } else { // --- SLICE SAMPLER PATH ---
     
     // ---
@@ -1067,6 +1156,19 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_cpp_old(
   for (double val : tau_beta) params_out.push_back(val);
   for (double val : nu) params_out.push_back(val);
   
+  // Create real_params_out
+  size_t real_param_size = 5 + beta_current.size() + beta_int_current.size() + tau_beta.size() + nu.size();
+  cpp11::writable::doubles real_params_out;
+  real_params_out.reserve(real_param_size);
+  real_params_out.push_back(alpha_current);
+  real_params_out.push_back(tau_int);
+  real_params_out.push_back(tau_glob);
+  real_params_out.push_back(xi);
+  for (int j = 0; j < p_mod; ++j) real_params_out.push_back(beta_current(j));
+  for (int k = 0; k < p_int; ++k) real_params_out.push_back(beta_int_current(k));
+  for (double val : tau_beta) real_params_out.push_back(val);
+  for (double val : nu) real_params_out.push_back(val);
+  
   // Create separate vector for residuals
   cpp11::writable::doubles residuals_out;
   residuals_out.reserve(n);
@@ -1090,6 +1192,7 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_cpp_old(
   // Return list with params and residuals separate
   return cpp11::writable::list({
     "params"_nm = params_out,
-      "residuals"_nm = residuals_out
+    "real_params"_nm = real_params_out,
+    "residuals"_nm = residuals_out
   });
 }

@@ -297,9 +297,9 @@ writable::list updateLinearTreatmentCpp_cpp(
     }
     
     // Shrinkage Updates
-    if (sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") {
+    if (sample_global_prior == "hybrid") {
       for(int j = 0; j < p_mod + regularize_ATE; j++){
-        tau_beta[j] = (sample_global_prior == "hybrid") ? 10.0 : 1.0;
+        tau_beta[j] = 10.0;
       }
       if(unlink){
         for(size_t k=0; k<int_pairs.size(); k++) {
@@ -309,11 +309,12 @@ writable::list updateLinearTreatmentCpp_cpp(
         }
       }
       
-    } else if (sample_global_prior != "OLS") {
+    } else if (sample_global_prior != "none") {
       for(int j = 0; j < p_mod + regularize_ATE; j++){
         double current_coeff = regularize_ATE ? ((j==0) ? alpha : beta[j-1]) : beta[j];
+        double current_tau_glob = (sample_global_prior == "hc-hs") ? 1.0 : tau_glob;
         nu[j] = rinvgamma_linear(1.0, 1.0 + 1.0 / safe_var_linear(tau_beta[j]*tau_beta[j]));
-        tau_beta[j] = std::sqrt(safe_var_linear(rinvgamma_linear(1.0, (1.0 / safe_var_linear(nu[j])) + (current_coeff * current_coeff) / safe_var_linear(2.0 * tau_glob * tau_glob * sigma2))));
+        tau_beta[j] = std::sqrt(safe_var_linear(rinvgamma_linear(1.0, (1.0 / safe_var_linear(nu[j])) + (current_coeff * current_coeff) / safe_var_linear(2.0 * current_tau_glob * current_tau_glob * sigma2))));
       } 
       if(unlink){
         for(size_t k=0; k<int_pairs.size(); k++) {
@@ -351,7 +352,7 @@ writable::list updateLinearTreatmentCpp_cpp(
           sum_scaled += (beta_int[k]*beta_int[k]) / safe_var_linear(tau_beta[offset_beta_int+k]*tau_beta[offset_beta_int+k]);
           shape_glob += 0.5;
         }
-      } else if (sample_global_prior != "hybrid" && sample_global_prior != "hc-hs") {
+      } else {
         for(size_t k=0; k<int_pairs.size(); k++) {
           double var_k = tau_int * tau_beta[offset_beta + int_pairs[k].first] * tau_beta[offset_beta + int_pairs[k].second];
           sum_scaled += (beta_int[k]*beta_int[k]) / safe_var_linear(var_k);
@@ -561,9 +562,9 @@ writable::list updateLinearTreatmentCpp_NCP_cpp(
     residual_map = y_target - new_fit;
     
     // Shrinkage
-    if (sample_global_prior == "hybrid" || sample_global_prior == "hc-hs") {
+    if (sample_global_prior == "hybrid") {
       for(int j=0; j<p_mod+regularize_ATE; ++j) {
-        tau_beta[j] = (sample_global_prior == "hybrid") ? 10.0 : 1.0;
+        tau_beta[j] = 10.0;
       }
       if(unlink){
         for(size_t k=0; k<int_pairs.size(); k++){
@@ -573,11 +574,12 @@ writable::list updateLinearTreatmentCpp_NCP_cpp(
         }
       }
       
-    } else if (sample_global_prior != "OLS") {
+    } else if (sample_global_prior != "none") {
       for(int j=0; j<p_mod+regularize_ATE; ++j) {
         double coef = regularize_ATE ? ((j==0)?alpha_current:beta_current(j-1)) : beta_current(j);
+        double current_tau_glob = (sample_global_prior == "hc-hs") ? 1.0 : tau_glob;
         nu[j] = rinvgamma_linear(1.0, 1.0 + 1.0/safe_var_linear(tau_beta[j]*tau_beta[j]));
-        tau_beta[j] = std::sqrt(safe_var_linear(rinvgamma_linear(1.0, (1.0/safe_var_linear(nu[j])) + (coef*coef)/safe_var_linear(2.0*tau_glob*tau_glob))));
+        tau_beta[j] = std::sqrt(safe_var_linear(rinvgamma_linear(1.0, (1.0/safe_var_linear(nu[j])) + (coef*coef)/safe_var_linear(2.0*current_tau_glob*current_tau_glob))));
       }
       if(unlink){
         for(size_t k=0; k<int_pairs.size(); k++){
@@ -614,7 +616,7 @@ writable::list updateLinearTreatmentCpp_NCP_cpp(
           sum_scaled += (beta_int_current(k) * beta_int_current(k)) / safe_var_linear(tau_beta[offset_beta_int + k] * tau_beta[offset_beta_int + k]);
           shape += 0.5;
         } 
-      } else if (sample_global_prior != "hybrid" && sample_global_prior != "hc-hs") {
+      } else {
         for(size_t k = 0; k < int_pairs.size(); ++k) {
           double var_k = tau_int * tau_beta[offset_beta + int_pairs[k].first] * tau_beta[offset_beta + int_pairs[k].second];
           sum_scaled += (beta_int_current(k) * beta_int_current(k)) / safe_var_linear(var_k);

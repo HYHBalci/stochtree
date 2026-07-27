@@ -33,8 +33,13 @@
 #'   \item `use_ncp`: Boolean. If `TRUE`, uses Non-Centered Parameterization for the linear sampler (recommended for stability).
 #'   \item `interaction_rule`: String. Defines how interactions are created (e.g., "continuous", "continuous_or_binary").
 #'   \item `regularize_ATE`: Boolean. If `TRUE`, the ATE (intercept) is subject to shrinkage.
-#'   \item `sample_global_prior`: String. Prior for global shrinkage parameter (e.g., "half-cauchy", "half-normal", "OLS" to bypass shrinkage).
-#'   \item `unlink`: Boolean. If `TRUE`, decouples interaction shrinkage from main effects.
+#'   \item `sample_global_prior`: String. Defines the global shrinkage prior. Options:
+#'     - `"half-cauchy"`: Standard horseshoe. Both main effects and interactions are shrunk locally and globally.
+#'     - `"half-normal"`: Similar to half-cauchy, but global shrinkage uses a half-Normal prior (via slice sampler).
+#'     - `"hc-hs"` (Half-Cauchy Horseshoe): Hybrid prior. Global shrinkage applies only to interactions. Main effects receive a marginal Cauchy prior (local shrinkage only).
+#'     - `"hybrid"`: Hybrid prior. Global shrinkage applies only to interactions. Main effects receive a flat prior (no shrinkage, variance fixed to 100 * sigma^2).
+#'     - `"none"` (or `"OLS"`): No shrinkage. `tau_beta` and `tau_glob` are fixed to constants.
+#'   \item `unlink`: Boolean. If `TRUE`, decouples interaction shrinkage from main effects, meaning interaction terms get their own independent local shrinkage parameters (`tau_beta`).
 #'   \item `probit_outcome_model`: Boolean. If `TRUE`, assumes binary outcome with probit link.
 #'   \item `standardize`: Boolean. Whether to standardize the outcome. Default `TRUE`.
 #' }
@@ -64,7 +69,7 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
     random_seed = -1, keep_burnin = FALSE, keep_gfr = FALSE, 
     keep_every = 1, num_chains = 1, verbose = T, sample_global_prior = "none", unlink = F, 
     propensity_seperate = "none", step_out = 0.5, max_steps = 50, gibbs = F, save_output = F, probit_outcome_model = F , interaction_rule = "continuous", standardize_cov = F, simple_prior = F, regularize_ATE = F, orthogonalize = F, 
-    sigma_residual = 0, hn_scale = 0, n_tijn = 1, use_ncp = F, robust = FALSE, robust_nu = 3
+    sigma_residual = 0, hn_scale = 1, p0 = 0, n_tijn = 1, use_ncp = F, robust = FALSE, robust_nu = 3
   )
   general_params_updated <- preprocessParams(
     general_params_default, general_params
@@ -99,6 +104,7 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
   n_tijn <- general_params_updated$n_tijn
   use_ncp <- general_params_updated$use_ncp
   hn_scale <- general_params_updated$hn_scale
+  p0 <- general_params_updated$p0
   sigma_residual <- general_params_updated$sigma_residual
   sample_global_prior <- general_params_updated$sample_global_prior
   unlink <- general_params_updated$unlink 
@@ -123,9 +129,10 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
   
   # Data handling
   if(is.character(sample_global_prior)){
-    sample_global_prior <- match.arg(sample_global_prior, c("half-cauchy", "half-normal", "none", "OLS", "hybrid", "hc-hs"))
+    if(sample_global_prior == "OLS") sample_global_prior <- "none"
+    sample_global_prior <- match.arg(sample_global_prior, c("half-cauchy", "half-normal", "none", "hybrid", "hc-hs"))
   } else {
-    stop("sample_global_prior must be a string: 'half-cauchy', 'half-normal', 'none', 'OLS', 'hybrid', or 'hc-hs'")
+    stop("sample_global_prior must be a string: 'half-cauchy', 'half-normal', 'none', 'hybrid', or 'hc-hs'")
   }
   if(general_params_updated$verbose){
     print("Pre-Processing data!")
@@ -166,6 +173,19 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
     p_mod <- p_mod + 1
   }
   beta <- rep(0, p_mod)
+  
+  # Piironen and Vehtari (2017) global scale for the horseshoe prior
+  if (p0 > 0) {
+    D <- p_mod + p_int + regularize_ATE
+    if (p0 >= D) {
+      warning("p0 must be strictly less than D (total number of covariates). Defaulting to unscaled horseshoe.")
+    } else {
+      hn_scale <- (p0 / (D - p0)) * (1 / sqrt(n))
+      if (general_params_updated$verbose) {
+        print(paste0("Using Piironen & Vehtari (2017) global scale: ", round(hn_scale, 5), " (p0=", p0, ", D=", D, ", N=", n, ")"))
+      }
+    }
+  }
   
   # Generate covariate names for output
   beta_names <- colnames(X_train_raw)
@@ -335,7 +355,7 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
     } else if (global_shrinkage == "hc-hs") {
       sample_global_prior <- "hc-hs"
     } else if (global_shrinkage == "OLS") {
-      sample_global_prior <- "OLS"
+      sample_global_prior <- "none"
     }
   }
   
@@ -784,8 +804,10 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
   }
   
   # Preliminary runtime checks for probit link
+  has_truncnorm <- requireNamespace("truncnorm", quietly = TRUE)
   if (probit_outcome_model) {
     if (!(length(unique(y_train)) == 2)) {
+
       stop("You specified a probit outcome model, but supplied an outcome with more than 2 unique values")
     }
     unique_outcomes <- sort(unique(y_train))
@@ -1196,10 +1218,19 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
         eta_pred <- forest_pred + y_bar_train
         mu0 <- eta_pred[y_train == 0]
         mu1 <- eta_pred[y_train == 1]
-        u0 <- runif(sum(y_train == 0), 0, pnorm(0 - mu0))
-        u1 <- runif(sum(y_train == 1), pnorm(0 - mu1), 1)
-        resid_train[y_train==0] <- mu0 + qnorm(u0)
-        resid_train[y_train==1] <- mu1 + qnorm(u1)
+        
+        if (has_truncnorm) {
+          resid_train[y_train==0] <- truncnorm::rtruncnorm(length(mu0), b = 0, mean = mu0, sd = 1)
+          resid_train[y_train==1] <- truncnorm::rtruncnorm(length(mu1), a = 0, mean = mu1, sd = 1)
+        } else {
+          u0_max <- pmax(pmin(pnorm(-mu0), 1 - 1e-10), 1e-10)
+          u0 <- runif(length(mu0), 1e-10, u0_max)
+          resid_train[y_train==0] <- pmin(mu0 + qnorm(u0), -1e-10)
+          
+          u1_min <- pmax(pmin(pnorm(-mu1), 1 - 1e-10), 1e-10)
+          u1 <- runif(length(mu1), u1_min, 1 - 1e-10)
+          resid_train[y_train==1] <- pmax(mu1 + qnorm(u1), 1e-10)
+        }
         
         # Update outcome
         outcome_train$update_data(resid_train - y_bar_train - forest_pred)
