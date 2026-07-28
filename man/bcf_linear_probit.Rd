@@ -71,8 +71,13 @@ that of \code{X_train}.}
 \item \code{use_ncp}: Boolean. If \code{TRUE}, uses Non-Centered Parameterization for the linear sampler (recommended for stability).
 \item \code{interaction_rule}: String. Defines how interactions are created (e.g., "continuous", "continuous_or_binary").
 \item \code{regularize_ATE}: Boolean. If \code{TRUE}, the ATE (intercept) is subject to shrinkage.
-\item \code{sample_global_prior}: String. Prior for global shrinkage parameter (e.g., "half-cauchy", "half-normal", "OLS" to bypass shrinkage).
-\item \code{unlink}: Boolean. If \code{TRUE}, decouples interaction shrinkage from main effects.
+\item \code{sample_global_prior}: String. Defines the global shrinkage prior. Options:
+- \code{"half-cauchy"}: Standard horseshoe. Both main effects and interactions are shrunk locally and globally.
+- \code{"half-normal"}: Similar to half-cauchy, but global shrinkage uses a half-Normal prior (via slice sampler).
+- \code{"hc-hs"} (Half-Cauchy Horseshoe): Hybrid prior. Global shrinkage applies only to interactions. Main effects receive a marginal Cauchy prior (local shrinkage only).
+- \code{"hybrid"}: Hybrid prior. Global shrinkage applies only to interactions. Main effects receive a flat prior (no shrinkage, variance fixed to 100 * sigma^2).
+- \code{"none"} (or \code{"OLS"}): No shrinkage. \code{tau_beta} and \code{tau_glob} are fixed to constants.
+\item \code{unlink}: Boolean. If \code{TRUE}, decouples interaction shrinkage from main effects, meaning interaction terms get their own independent local shrinkage parameters (\code{tau_beta}).
 \item \code{probit_outcome_model}: Boolean. If \code{TRUE}, assumes binary outcome with probit link.
 \item \code{standardize}: Boolean. Whether to standardize the outcome. Default \code{TRUE}.
 }}

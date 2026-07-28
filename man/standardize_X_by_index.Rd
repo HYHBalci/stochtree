@@ -24,6 +24,7 @@ Must be one of:
 \item \code{"continuous"} (Default): Allows interactions where at least one variable is continuous.
 \item \code{"continuous_or_binary"}: Allows interactions where at least one variable is continuous OR binary.
 \item \code{"all"}: Allows all possible two-way interactions between valid columns.
+\item \code{"none"}: No interactions are allowed.
 }}
 
 \item{cat_coding_method}{A character string for categorical variable contrast coding.

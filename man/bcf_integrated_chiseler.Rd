@@ -11,6 +11,9 @@ bcf_integrated_chiseler(
   propensity_train = NULL,
   tau_c = 0,
   kappa_weight = 2,
+  boundary_link = c("logit", "probit"),
+  cost_ratio = 1,
+  kappa_schedule = c("constant", "adaptive"),
   rfx_group_ids_train = NULL,
   rfx_basis_train = NULL,
   num_gfr = 5,
@@ -33,6 +36,12 @@ bcf_integrated_chiseler(
 \item{tau_c}{The clinical decision threshold for the boundary. Default: 0.0.}
 
 \item{kappa_weight}{kappa_weight for the decision boundary.}
+
+\item{boundary_link}{Link function for the boundary horseshoe sampler ("logit" or "probit"). Default: "logit".}
+
+\item{cost_ratio}{Asymmetric clinical cost ratio (cost of false negative / cost of false positive). Default: 1.0.}
+
+\item{kappa_schedule}{Temperature schedule for chiseling weight intensity ("constant" or "adaptive"). Default: "constant".}
 
 \item{rfx_group_ids_train}{(Optional) Group labels used for an additive random effects model.}
 

@@ -69,7 +69,7 @@ writable::list horseshoe_probit_step_cpp(
     double mu_i = X_beta(i);
     if (std::isnan(mu_i)) mu_i = 0.0;
     
-    double sd_i = 1.0 / std::sqrt(w_safe);
+    double sd_i = 1.0;
     z(i) = rtruncnorm_cpp(mu_i, sd_i, y_star[i] == 1);
   }  
   
@@ -107,14 +107,14 @@ writable::list horseshoe_probit_step_cpp(
   // 3. Sample Horseshoe Variances 
   double sum_beta_sq = 0.0;
   for (int j = 1; j < p; ++j) {
-    lambda_sq(j) = rinvgamma_cpp(0.5, 1.0 / std::max(nu(j), 1e-8) + (beta(j) * beta(j)) / std::max(2.0 * tau_sq, 1e-8));
-    nu(j) = rinvgamma_cpp(0.5, 1.0 + 1.0 / std::max(lambda_sq(j), 1e-8));
+    lambda_sq(j) = rinvgamma_cpp(1.0, 1.0 / std::max(nu(j), 1e-8) + (beta(j) * beta(j)) / std::max(2.0 * tau_sq, 1e-8));
+    nu(j) = rinvgamma_cpp(1.0, 1.0 + 1.0 / std::max(lambda_sq(j), 1e-8));
     
     sum_beta_sq += (beta(j) * beta(j)) / std::max(lambda_sq(j), 1e-8);
   }  
   
   tau_sq = rinvgamma_cpp(((p - 1.0) + 1.0) / 2.0, 1.0 / std::max(xi, 1e-8) + sum_beta_sq / 2.0);
-  xi = rinvgamma_cpp(0.5, 1.0 + 1.0 / std::max(tau_sq, 1e-8));
+  xi = rinvgamma_cpp(1.0, 1.0 + 1.0 / std::max(tau_sq, 1e-8));
   
   PutRNGstate();
   
@@ -135,3 +135,109 @@ writable::list horseshoe_probit_step_cpp(
       "xi"_nm = xi 
   }); 
 }
+
+[[cpp11::register]]
+writable::list horseshoe_logit_step_cpp(
+    const doubles_matrix<>& X,
+    const integers& y_star,
+    const doubles& weights,
+    const doubles& omega_in,
+    const doubles& beta_in,
+    const doubles& lambda_sq_in,
+    double tau_sq,
+    const doubles& nu_in,
+    double xi) {
+  
+  GetRNGstate();
+  
+  int n = X.nrow();
+  int p = X.ncol();
+  
+  Eigen::Map<const Eigen::MatrixXd> X_map(REAL(X), n, p);
+  Eigen::Map<const Eigen::VectorXd> W_map(REAL(weights), n);
+  Eigen::Map<const Eigen::VectorXd> omega_map(REAL(omega_in), n);
+  Eigen::Map<const Eigen::VectorXd> beta_map(REAL(beta_in), p);
+  Eigen::Map<const Eigen::VectorXd> lambda_sq_map(REAL(lambda_sq_in), p);
+  Eigen::Map<const Eigen::VectorXd> nu_map(REAL(nu_in), p);
+  
+  Eigen::VectorXd beta = beta_map;
+  Eigen::VectorXd lambda_sq = lambda_sq_map;
+  Eigen::VectorXd nu = nu_map;
+
+  // 1. Calculate effective weight W_eff = weights * omega and kappa = weights * (y_star - 0.5)
+  Eigen::VectorXd W_eff(n);
+  Eigen::VectorXd kappa(n);
+  for (int i = 0; i < n; ++i) {
+    double w_safe = W_map(i);
+    if (std::isnan(w_safe) || w_safe < 1e-8) w_safe = 1e-8;
+    
+    double om_safe = omega_map(i);
+    if (std::isnan(om_safe) || om_safe < 1e-9) om_safe = 1e-9;
+    
+    W_eff(i) = w_safe * om_safe;
+    kappa(i) = w_safe * (y_star[i] - 0.5);
+  }
+
+  // 2. Compute Precision matrix and RHS
+  Eigen::MatrixXd X_T_W = X_map.transpose() * W_eff.asDiagonal();
+  Eigen::MatrixXd Prec = X_T_W * X_map;
+  Eigen::VectorXd RHS = X_map.transpose() * kappa;
+
+  Eigen::VectorXd Lambda_inv_diag(p);
+  Lambda_inv_diag(0) = 1e-4; // Intercept prior variance = 10000 -> precision = 1e-4
+  
+  for (int j = 1; j < p; ++j) {
+    double shrink_factor = lambda_sq(j) * tau_sq;
+    shrink_factor = std::max(shrink_factor, 1e-12); 
+    double precision_val = 1.0 / shrink_factor;
+    Lambda_inv_diag(j) = std::min(precision_val, 1e8); 
+  }  
+  
+  Prec.diagonal() += Lambda_inv_diag;
+  
+  Eigen::LLT<Eigen::MatrixXd> llt(Prec);
+  if (llt.info() != Eigen::Success) {
+    Prec.diagonal().array() += 1e-4; 
+    llt.compute(Prec);
+  }  
+  
+  if (llt.info() != Eigen::Success) {
+    for (int j = 0; j < p; ++j) beta(j) = Rf_rnorm(0.0, 1e-2);
+  } else { 
+    Eigen::VectorXd mean = llt.solve(RHS);
+    Eigen::VectorXd noise(p);
+    for (int j = 0; j < p; ++j) noise(j) = Rf_rnorm(0.0, 1.0);
+    beta = mean + llt.matrixU().solve(noise);
+  }   
+
+  // 3. Sample Horseshoe Variances 
+  double sum_beta_sq = 0.0;
+  for (int j = 1; j < p; ++j) {
+    lambda_sq(j) = rinvgamma_cpp(1.0, 1.0 / std::max(nu(j), 1e-8) + (beta(j) * beta(j)) / std::max(2.0 * tau_sq, 1e-8));
+    nu(j) = rinvgamma_cpp(1.0, 1.0 + 1.0 / std::max(lambda_sq(j), 1e-8));
+    
+    sum_beta_sq += (beta(j) * beta(j)) / std::max(lambda_sq(j), 1e-8);
+  }  
+  
+  tau_sq = rinvgamma_cpp(((p - 1.0) + 1.0) / 2.0, 1.0 / std::max(xi, 1e-8) + sum_beta_sq / 2.0);
+  xi = rinvgamma_cpp(1.0, 1.0 + 1.0 / std::max(tau_sq, 1e-8));
+  
+  PutRNGstate();
+  
+  writable::doubles beta_out(p);
+  writable::doubles lambda_sq_out(p);
+  writable::doubles nu_out(p);
+  for (int j = 0; j < p; ++j) {
+    beta_out[j] = beta(j);
+    lambda_sq_out[j] = lambda_sq(j);
+    nu_out[j] = nu(j);
+  }   
+  
+  return writable::list({
+    "beta"_nm = beta_out,
+    "lambda_sq"_nm = lambda_sq_out,
+    "tau_sq"_nm = tau_sq,
+    "nu"_nm = nu_out,
+    "xi"_nm = xi 
+  }); 
+}

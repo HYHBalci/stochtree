@@ -244,6 +244,10 @@ horseshoe_probit_step_cpp <- function(X, y_star, weights, beta_in, lambda_sq_in,
   .Call(`_stochtree_horseshoe_probit_step_cpp`, X, y_star, weights, beta_in, lambda_sq_in, tau_sq, nu_in, xi)
 }
 
+horseshoe_logit_step_cpp <- function(X, y_star, weights, omega_in, beta_in, lambda_sq_in, tau_sq, nu_in, xi) {
+  .Call(`_stochtree_horseshoe_logit_step_cpp`, X, y_star, weights, omega_in, beta_in, lambda_sq_in, tau_sq, nu_in, xi)
+}
+
 active_forest_cpp <- function(num_trees, output_dimension, is_leaf_constant, is_exponentiated) {
   .Call(`_stochtree_active_forest_cpp`, num_trees, output_dimension, is_leaf_constant, is_exponentiated)
 }

@@ -2,19 +2,12 @@
 % Please edit documentation in R/Shapley.R
 \name{interaction_pairs}
 \alias{interaction_pairs}
-\title{Generate Interaction Pairs Based on a Boolean Vector}
+\title{Generate Interaction Pairs Based on a Boolean Vector
+(Fallback function if the model does not provide them natively)}
 \usage{
 interaction_pairs(num_covariates, boolean_vector)
 }
-\arguments{
-\item{num_covariates}{The total number of covariates.}
-
-\item{boolean_vector}{A logical vector of length \code{num_covariates}. An interaction is included if at least one of the covariates is TRUE}
-}
-\value{
-A 2-row matrix where each column is a pair of interacting variable indices.
-}
 \description{
-This function creates a matrix of pairwise interaction indices, but only includes
-pairs where at least one of the variables is marked as TRUE in the boolean vector.
+Generate Interaction Pairs Based on a Boolean Vector
+(Fallback function if the model does not provide them natively)
 }

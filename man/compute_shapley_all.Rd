@@ -2,30 +2,10 @@
 % Please edit documentation in R/Shapley.R
 \name{compute_shapley_all}
 \alias{compute_shapley_all}
-\title{Compute Shapley Values for Multiple Observations}
+\title{Optimized Global Shapley Calculator}
 \usage{
-compute_shapley_all(
-  X,
-  beta_post,
-  beta_int_post,
-  indices = NULL,
-  boolean_interaction
-)
-}
-\arguments{
-\item{X}{A centered covariate matrix (n x p) where each row is an observation and each column is a feature.}
-
-\item{beta_post}{A 3D array of posterior main effect coefficients: (chains x samples x p).}
-
-\item{beta_int_post}{A 3D array of posterior interaction effect coefficients: (chains x samples x p_int).}
-
-\item{indices}{Optional vector of row indices from \code{X} for which to compute Shapley values. If \code{NULL}, 100 random indices are sampled.}
-
-\item{boolean_interaction}{Logical vector indicating if variable i should be allowed to interact with a variable for which boolean_interaction\link{j} == FALSE}
-}
-\value{
-A data frame with Shapley values for each selected observation and feature.
+compute_shapley_all(X, beta_post, beta_int_post, ipairs, indices = NULL)
 }
 \description{
-Computes Shapley values for a subset of observations in the dataset.
+Optimized Global Shapley Calculator
 }

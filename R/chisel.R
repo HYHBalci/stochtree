@@ -12,16 +12,28 @@
 #' @param num_burnin Number of "burn-in" iterations. Default: 100.
 #' @param num_mcmc Number of "retained" iterations. Default: 500.
 #' @param general_params (Optional) A list of general model parameters.
+#' @param boundary_link Link function for the boundary horseshoe sampler ("logit" or "probit"). Default: "logit".
+#' @param cost_ratio Asymmetric clinical cost ratio (cost of false negative / cost of false positive). Default: 1.0.
+#' @param kappa_schedule Temperature schedule for chiseling weight intensity ("constant" or "adaptive"). Default: "constant".
 #' @param prognostic_forest_params (Optional) A list of prognostic forest model parameters.
 #' @param variance_forest_params (Optional) A list of variance forest model parameters.
 #' @return A list of class `bcfchiseler` containing posterior samples, inclusion probabilities, and boundary coefficients.
 #' @export
 bcf_integrated_chiseler <- function(X_train, Z_train, y_train, propensity_train = NULL, 
                                     tau_c = 0.0, kappa_weight = 2.0, 
+                                    boundary_link = c("logit", "probit"),
+                                    cost_ratio = 1.0,
+                                    kappa_schedule = c("constant", "adaptive"),
                                     rfx_group_ids_train = NULL, rfx_basis_train = NULL, 
                                     num_gfr = 5, num_burnin = 100, num_mcmc = 500, 
                                     general_params = list(), prognostic_forest_params = list(), 
                                     variance_forest_params = list()) {
+  boundary_link <- match.arg(boundary_link)
+  kappa_schedule <- match.arg(kappa_schedule)
+  Z_train <- as.double(Z_train)
+  y_train <- as.double(y_train)
+
+
   
   general_params_default <- list(
     cutpoint_grid_size = 100, standardize = TRUE, sample_sigma2_global = TRUE, sigma2_global_init = NULL, 
@@ -59,8 +71,9 @@ bcf_integrated_chiseler <- function(X_train, Z_train, y_train, propensity_train 
   if (is.null(propensity_train) && general_params_updated$propensity_covariate != "none") {
     internal_propensity_model <- TRUE
     if(general_params_updated$verbose) print("Estimating internal propensity scores...")
-    bart_model_propensity <- bart(X_train = X_train_raw, y_train = as.numeric(Z_train), 
+    bart_model_propensity <- bart(X_train = X_train_raw, y_train = as.double(Z_train), 
                                   num_gfr = 50, num_burnin = 0, num_mcmc = 0)
+
     propensity_train <- as.matrix(rowMeans(bart_model_propensity$y_hat_train[, 11:50]))
   }
   if(is.null(propensity_train)) propensity_train <- rep(mean(Z_train), n)
@@ -74,13 +87,14 @@ bcf_integrated_chiseler <- function(X_train, Z_train, y_train, propensity_train 
   # =====================================================================
   X_boundary <- cbind(1, as.matrix(X_train_raw))
   colnames(X_boundary)[1] <- "Intercept"
+  storage.mode(X_boundary) <- "double"
   p_bound <- ncol(X_boundary)
   
-  hs_beta <- rep(0, p_bound)
-  hs_lambda_sq <- rep(1, p_bound)
-  hs_tau_sq <- 1
-  hs_nu <- rep(1, p_bound)
-  hs_xi <- 1
+  hs_beta <- as.numeric(rep(0, p_bound))
+  hs_lambda_sq <- as.numeric(rep(1, p_bound))
+  hs_tau_sq <- 1.0
+  hs_nu <- as.numeric(rep(1, p_bound))
+  hs_xi <- 1.0
   # =====================================================================
   
   num_chains <- general_params_updated$num_chains
@@ -324,26 +338,54 @@ bcf_integrated_chiseler <- function(X_train, Z_train, y_train, propensity_train 
       # 2. Calculate the Pseudo-CATE securely
       alpha_tilde <- alpha + (s_i / (prop_safe * (1 - prop_safe)))
       
-      # 3. Create the shifting labels and CHISELING weights
+      # 3. Create the shifting labels and CHISELING weights (Vapnik boundary localization)
       y_star <- as.integer(alpha_tilde >= tau_c)
       
-      weights <- exp(-kappa_weight * abs(alpha_tilde - tau_c)) + 1e-6
+      current_kappa <- if (kappa_schedule == "adaptive") {
+        kappa_weight * (0.5 + 0.5 * (i / num_samples))
+      } else {
+        kappa_weight
+      }
       
-      # Final safeguard to ensure mean(weights) is never exactly 0
-      w_mean <- mean(weights)
-      if (is.na(w_mean) || w_mean < 1e-8) w_mean <- 1e-8
-      weights <- weights / w_mean 
+      weights <- exp(-current_kappa * abs(alpha_tilde - tau_c)) + 1e-6
+      if (cost_ratio != 1.0) {
+        weights <- weights * ifelse(y_star == 1, cost_ratio, 1.0)
+      }
       
-      hs_step <- horseshoe_probit_step_cpp(
-        X = X_boundary, 
-        y_star = y_star, 
-        weights = weights, 
-        beta_in = hs_beta, 
-        lambda_sq_in = hs_lambda_sq, 
-        tau_sq = hs_tau_sq, 
-        nu_in = hs_nu, 
-        xi = hs_xi
-      )
+      # Final safeguard to ensure max(weights) is never exactly 0
+      w_max <- max(weights)
+      if (is.na(w_max) || w_max < 1e-8) w_max <- 1e-8
+      weights <- weights / w_max 
+
+      
+      if (boundary_link == "logit") {
+        eta_bound <- as.vector(X_boundary %*% hs_beta)
+        omega <- BayesLogit::rpg(num = n, h = 1, z = abs(eta_bound))
+        
+        hs_step <- horseshoe_logit_step_cpp(
+          X = X_boundary, 
+          y_star = as.integer(y_star), 
+          weights = as.numeric(weights), 
+          omega_in = as.numeric(omega),
+          beta_in = as.numeric(hs_beta), 
+          lambda_sq_in = as.numeric(hs_lambda_sq), 
+          tau_sq = as.double(hs_tau_sq), 
+          nu_in = as.numeric(hs_nu), 
+          xi = as.double(hs_xi)
+        )
+      } else {
+        hs_step <- horseshoe_probit_step_cpp(
+          X = X_boundary, 
+          y_star = as.integer(y_star), 
+          weights = as.numeric(weights), 
+          beta_in = as.numeric(hs_beta), 
+          lambda_sq_in = as.numeric(hs_lambda_sq), 
+          tau_sq = as.double(hs_tau_sq), 
+          nu_in = as.numeric(hs_nu), 
+          xi = as.double(hs_xi)
+        )
+      }
+
       
       # 5. Overwrite state (allows the chain to carry forward)
       hs_beta <- hs_step$beta
@@ -381,6 +423,11 @@ bcf_integrated_chiseler <- function(X_train, Z_train, y_train, propensity_train 
   
   result <- list(
     "model_params" = general_params_updated,
+    "boundary_link" = boundary_link,
+    "cost_ratio" = cost_ratio,
+    "kappa_schedule" = kappa_schedule,
+    "tau_c" = tau_c,
+    "kappa_weight" = kappa_weight,
     "alpha_samples" = alpha_samples,
     "sigma2_samples" = sigma2_samples,
     "beta_boundary_samples" = beta_samples,
@@ -390,6 +437,7 @@ bcf_integrated_chiseler <- function(X_train, Z_train, y_train, propensity_train 
     "mu_hat_train" = mu_hat_train,
     "train_set_metadata" = X_train_metadata
   )
+
   
   if (internal_propensity_model) result[["bart_propensity_model"]] <- bart_model_propensity
   if (include_variance_forest) result[["forests_variance"]] <- forest_samples_variance
@@ -398,3 +446,23 @@ bcf_integrated_chiseler <- function(X_train, Z_train, y_train, propensity_train 
   class(result) <- "bcfchiseler"
   return(result)
 }
+
+#' Predict method for `bcfchiseler` objects
+#'
+#' @param object An object of class `bcfchiseler`.
+#' @param X_test Matrix of covariates for test set.
+#' @param ... Additional arguments.
+#' @return A list containing posterior probabilities (`prob_smoothed`) and linear predictor draws (`boundary_linear_preds`).
+#' @export
+predict.bcfchiseler <- function(object, X_test, ...) {
+  X_boundary_test <- cbind(1, as.matrix(X_test))
+  colnames(X_boundary_test)[1] <- "Intercept"
+  
+  boundary_linear_preds <- object$beta_boundary_samples %*% t(X_boundary_test)
+  prob_smoothed <- colMeans(boundary_linear_preds > 0)
+  
+  return(list(
+    "prob_smoothed" = prob_smoothed,
+    "boundary_linear_preds" = boundary_linear_preds
+  ))
+}
