@@ -89,8 +89,7 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
   sigma2_samples <- matrix(0, nrow = num_chains, ncol = num_mcmc)
   
   if (use_rao_blackwell) {
-    T_vec_sum <- matrix(0, nrow = num_chains, ncol = p_valid)
-    Var_T_sum <- array(0, dim = c(num_chains, p_valid, p_valid))
+    s_i_sum <- matrix(0, nrow = num_chains, ncol = n)
     pval_max_samples <- NULL
     pval_quad_samples <- NULL
   } else {
@@ -255,19 +254,14 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
         s_i <- resid_full * Z_cen
         s_i_cen <- s_i - mean(s_i)
         
-        # 2. Linear Permutation Statistic
-        T_vec <- t(X_cen) %*% s_i_cen
-        
-        # 3. Robust Covariance
-        X_s <- X_cen * as.vector(s_i_cen)
-        Var_T <- crossprod(X_s)
-        
         if (use_rao_blackwell) {
-          # Accumulate components instead of computing noisy P-values
-          T_vec_sum[chain_num, ] <- T_vec_sum[chain_num, ] + as.numeric(T_vec)
-          Var_T_sum[chain_num, , ] <- Var_T_sum[chain_num, , ] + Var_T
+          # Accumulate score residuals to compute variance at the posterior mean
+          s_i_sum[chain_num, ] <- s_i_sum[chain_num, ] + as.numeric(s_i_cen)
         } else {
           # Legacy method: P-values at every draw using safe evaluation
+          T_vec <- t(X_cen) %*% s_i_cen
+          X_s <- X_cen * as.vector(s_i_cen)
+          Var_T <- crossprod(X_s)
           draw_pvals <- compute_pmvnorm_safe(T_vec, Var_T, p_valid)
           pval_quad_samples[chain_num, mcmc_counter] <- draw_pvals$quad
           pval_max_samples[chain_num, mcmc_counter] <- draw_pvals$max
@@ -284,8 +278,11 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
     rb_pval_max <- numeric(num_chains)
     
     for (c in 1:num_chains) {
-      T_vec_mean <- T_vec_sum[c, ] / num_mcmc
-      Var_T_mean <- Var_T_sum[c, , ] / num_mcmc
+      s_i_mean <- s_i_sum[c, ] / num_mcmc
+      
+      T_vec_mean <- t(X_cen) %*% s_i_mean
+      X_s_mean <- X_cen * as.vector(s_i_mean)
+      Var_T_mean <- crossprod(X_s_mean)
       
       rb_pvals <- compute_pmvnorm_safe(T_vec_mean, Var_T_mean, p_valid)
       rb_pval_quad[c] <- rb_pvals$quad
@@ -377,7 +374,7 @@ prepare_score_test_design <- function(X_train_raw, X_train_metadata_init, intera
   return(list(X_cen = X_cen, p_valid = p_valid))
 }
 
-compute_pmvnorm_safe <- function(T_vec, Var_T, p_valid) {
+compute_pmvnorm_safe <- function(T_vec, Var_T, p_valid, n_sim = 10000) {
   # Add a tiny ridge penalty to ensure positive definiteness in edge cases
   Var_T_ridge <- Var_T + diag(1e-8, p_valid)
   
@@ -396,17 +393,23 @@ compute_pmvnorm_safe <- function(T_vec, Var_T, p_valid) {
   Z_vec <- as.numeric(T_vec * inv_sd_T)
   max_Z <- max(abs(Z_vec))
   
-  if (p_valid > 20) {
-    # Skip pmvnorm if dimensions are too high (will hang indefinitely)
-    pval_max <- max(0, 1 - (p_valid * 2 * pnorm(-max_Z)))
-  } else {
-    prob_inside <- tryCatch({
-      mvtnorm::pmvnorm(lower = rep(-max_Z, p_valid), upper = rep(max_Z, p_valid), sigma = Cor_T)[1]
-    }, error = function(e) {
-      max(0, 1 - (p_valid * 2 * pnorm(-max_Z)))
-    })
-    pval_max <- 1 - prob_inside
-  }
+  # Max test via simulation
+  # We simulate Z_sim ~ N(0, Cor_T)
+  # Then compute proportion of times max(abs(Z_sim)) >= max_Z
+  pval_max <- tryCatch({
+    chol_Cor <- chol(Cor_T)
+    # Generate standard normals: (p_valid x n_sim)
+    Z_standard <- matrix(rnorm(p_valid * n_sim), nrow = p_valid, ncol = n_sim)
+    # Multiply by Cholesky factor to get correlated normals
+    Z_sim <- crossprod(chol_Cor, Z_standard)
+    # Find max absolute value for each simulation
+    max_Z_sim <- apply(abs(Z_sim), 2, max)
+    # Compute p-value
+    mean(max_Z_sim >= max_Z)
+  }, error = function(e) {
+    # Fallback to Bonferroni bound if Cholesky fails (e.g., matrix not pos-def)
+    max(0, 1 - (p_valid * 2 * pnorm(-max_Z)))
+  })
   
   return(list(quad = pval_quad, max = pval_max))
 }

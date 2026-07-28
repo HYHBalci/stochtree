@@ -70,6 +70,43 @@ ltr_scorecard <- function(tau_tilde, X, method = c("MSE", "PG"),
   xi_init <- 1.0
   sigma2_rank_init <- 1.0
   
+  # Compute analytical pre-test for heterogeneity (main effects)
+  valid_cols <- apply(X, 2, sd) > 1e-6
+  if (any(valid_cols)) {
+    X_cen <- scale(X[, valid_cols, drop = FALSE], center = TRUE, scale = TRUE)
+    n_obs <- nrow(X_cen)
+    p_valid <- ncol(X_cen)
+    
+    if (method == "MSE") {
+      s_vec <- tau_tilde - mean(tau_tilde)
+    } else {
+      # PG method uses ranks (equivalent to multivariate Kendall's Tau / Spearman's Rho)
+      s_vec <- 2 * rank(tau_tilde) - n_obs - 1
+    }
+    
+    U_stat <- as.numeric(t(X_cen) %*% s_vec)
+    var_s <- sum(s_vec^2) / (n_obs - 1)
+    Var_U <- var_s * crossprod(X_cen)
+    
+    # Tiny ridge for numerical stability
+    Var_U_ridge <- Var_U + diag(1e-8, p_valid)
+    
+    Var_U_inv <- tryCatch({
+      solve(Var_U_ridge)
+    }, error = function(e) {
+      if (requireNamespace("MASS", quietly = TRUE)) {
+        MASS::ginv(Var_U)
+      } else {
+        diag(1/diag(Var_U_ridge))
+      }
+    })
+    
+    T_quad <- as.numeric(t(U_stat) %*% Var_U_inv %*% U_stat)
+    pre_test_pval <- pchisq(T_quad, df = p_valid, lower.tail = FALSE)
+  } else {
+    pre_test_pval <- 1.0
+  }
+  
   if (method == "MSE") {
     out <- run_ltr_mse_cpp(
       tau_tilde = tau_tilde,
@@ -108,6 +145,8 @@ ltr_scorecard <- function(tau_tilde, X, method = c("MSE", "PG"),
       burn_in = burn_in
     )
   }
+  
+  out$pre_test_main_effects_pval <- pre_test_pval
   
   return(out)
 }
