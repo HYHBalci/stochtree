@@ -188,8 +188,10 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
   num_samples <- num_gfr + num_burnin + num_mcmc
   
   if (test_type == "distributional") {
-    # Define a static grid based on initial residuals
-    t_grid <- as.numeric(quantile(resid_train_base, probs = seq(0.01, 0.99, length.out = num_grid_points)))
+    # Grid will be set adaptively on the first MCMC iteration,
+    # after BART has warmed up and the residuals reflect the fitted model
+    t_grid <- NULL
+    grid_initialized <- FALSE
   }
   
   # =====================================================================
@@ -285,6 +287,12 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
             pval_max_samples[chain_num, mcmc_counter] <- draw_pvals$max
           }
         } else if (test_type == "distributional") {
+          # On the first MCMC iteration, set the grid from post-warmup residuals
+          if (!grid_initialized) {
+            t_grid <- as.numeric(quantile(resid_full, probs = seq(0.01, 0.99, length.out = num_grid_points)))
+            grid_initialized <- TRUE
+          }
+          
           # Calculate Empirical CDF Indicators and Score Matrix
           I_mat <- outer(as.numeric(resid_full), t_grid, "<=") * 1.0
           F_k_draw <- colMeans(I_mat)
@@ -485,6 +493,10 @@ compute_distributional_pvalue_safe <- function(U_k_mean, F_k_mean, t_grid, X_cen
   T_wass_obs <- sum(t_diffs * sqrt(T_k_obs[-K])) 
   T_cvm_obs <- mean(T_k_obs)
   
+  # Use the same ridged X_Z_X as V_k to ensure consistency between
+  # the null simulation and the standardization of the test statistic
+  X_Z_X_ridge <- X_Z_X + diag(1e-8 / max(F_k_mean * (1 - F_k_mean)), p_valid)
+  
   Sigma_full <- matrix(0, nrow = p_valid * K, ncol = p_valid * K)
   for (k in 1:K) {
     for (l in 1:K) {
@@ -493,10 +505,9 @@ compute_distributional_pvalue_safe <- function(U_k_mean, F_k_mean, t_grid, X_cen
       if (cov_F < 0) cov_F <- 0
       idx_k <- ((k-1)*p_valid + 1):(k*p_valid)
       idx_l <- ((l-1)*p_valid + 1):(l*p_valid)
-      Sigma_full[idx_k, idx_l] <- cov_F * X_Z_X
+      Sigma_full[idx_k, idx_l] <- cov_F * X_Z_X_ridge
     }
   }
-  Sigma_full <- Sigma_full + diag(1e-8, p_valid * K)
   
   chol_Sigma <- tryCatch(chol(Sigma_full), error = function(e) NULL)
   

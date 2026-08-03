@@ -889,6 +889,10 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_cpp_old(
       
       Eigen::LLT<Eigen::MatrixXd> lltOfM(M_solve);
       if (lltOfM.info() != Eigen::Success) {
+        M_solve.diagonal().array() += 1e-6;
+        lltOfM.compute(M_solve);
+      }
+      if (lltOfM.info() != Eigen::Success) {
         cpp11::warning("Cholesky of n x n system failed in NCP fast sampler. Betas not updated.");
       } else { 
         Eigen::VectorXd w = lltOfM.solve(y_target_scaled - v);
@@ -979,6 +983,7 @@ cpp11::writable::list updateLinearTreatmentCpp_NCP_cpp_old(
     
     if(regularize_ATE) full_beta_current(0) = alpha_current;
     for(int j=0; j<p_mod; ++j) full_beta_current(j + regularize_ATE) = beta_current(j);
+    for(int k=0; k<p_int; ++k) full_beta_current(p_mod + regularize_ATE + k) = beta_int_current(k);
     Eigen::VectorXd new_fit = X_design_map * full_beta_current;
     residual_map = y_target - new_fit;
     

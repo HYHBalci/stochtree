@@ -69,7 +69,7 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
     random_seed = -1, keep_burnin = FALSE, keep_gfr = FALSE, 
     keep_every = 1, num_chains = 1, verbose = T, sample_global_prior = "none", unlink = F, 
     propensity_seperate = "none", step_out = 0.5, max_steps = 50, gibbs = F, save_output = F, probit_outcome_model = F , interaction_rule = "continuous", standardize_cov = F, simple_prior = F, regularize_ATE = F, orthogonalize = F, 
-    sigma_residual = 0, hn_scale = 1, p0 = 0, n_tijn = 1, use_ncp = F, robust = FALSE, robust_nu = 3
+    sigma_residual = 0, hn_scale = 1, p0 = 0, n_tijn = 1, use_ncp = F, robust = FALSE, robust_nu = 3, global_shrinkage = NULL
   )
   general_params_updated <- preprocessParams(
     general_params_default, general_params
@@ -743,16 +743,16 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
   if ((is.null(propensity_train)) && (propensity_covariate != "none")) {
     internal_propensity_model <- TRUE
     # Estimate using the last of several iterations of GFR BART
-    num_burnin <- 10
-    num_total <- 50
+    num_burnin_prop <- 10
+    num_total_prop <- 50
     bart_model_propensity <- bart(X_train = X_train, y_train = as.numeric(Z_train), X_test = X_test_raw, 
-                                  num_gfr = num_total, num_burnin = 0, num_mcmc = 0)
-    propensity_train <- rowMeans(bart_model_propensity$y_hat_train[,(num_burnin+1):num_total])
+                                  num_gfr = num_total_prop, num_burnin = 0, num_mcmc = 0)
+    propensity_train <- rowMeans(bart_model_propensity$y_hat_train[,(num_burnin_prop+1):num_total_prop])
     if ((is.null(dim(propensity_train))) && (!is.null(propensity_train))) {
       propensity_train <- as.matrix(propensity_train)
     }
     if (has_test) {
-      propensity_test <- rowMeans(bart_model_propensity$y_hat_test[,(num_burnin+1):num_total])
+      propensity_test <- rowMeans(bart_model_propensity$y_hat_test[,(num_burnin_prop+1):num_total_prop])
       if ((is.null(dim(propensity_test))) && (!is.null(propensity_test))) {
         propensity_test <- as.matrix(propensity_test)
       }
@@ -1676,7 +1676,7 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
         if (verbose) {
           if (num_burnin > 0) {
             if (((i - num_gfr) %% 100 == 0) || ((i - num_gfr) == num_burnin)) {
-              cat("Sampling", i - num_gfr, "out of", num_gfr, "BCF burn-in draws\n")
+              cat("Sampling", i - num_gfr, "out of", num_burnin, "BCF burn-in draws\n")
             }
           }
           if (num_mcmc > 0) {
@@ -1719,10 +1719,18 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           eta_pred <- forest_pred + y_bar_train
           mu0 <- eta_pred[y_train == 0]
           mu1 <- eta_pred[y_train == 1]
-          u0 <- runif(sum(y_train == 0), 0, pnorm(0 - mu0))
-          u1 <- runif(sum(y_train == 1), pnorm(0 - mu1), 1)
-          resid_train[y_train==0] <- mu0 + qnorm(u0)
-          resid_train[y_train==1] <- mu1 + qnorm(u1)
+          if (has_truncnorm) {
+            resid_train[y_train==0] <- truncnorm::rtruncnorm(length(mu0), b = 0, mean = mu0, sd = 1)
+            resid_train[y_train==1] <- truncnorm::rtruncnorm(length(mu1), a = 0, mean = mu1, sd = 1)
+          } else {
+            u0_max <- pmax(pmin(pnorm(-mu0), 1 - 1e-10), 1e-10)
+            u0 <- runif(length(mu0), 1e-10, u0_max)
+            resid_train[y_train==0] <- pmin(mu0 + qnorm(u0), -1e-10)
+            
+            u1_min <- pmax(pmin(pnorm(-mu1), 1 - 1e-10), 1e-10)
+            u1 <- runif(length(mu1), u1_min, 1 - 1e-10)
+            resid_train[y_train==1] <- pmax(mu1 + qnorm(u1), 1e-10)
+          }
           
           # Update outcome
           outcome_train$update_data(resid_train - y_bar_train - forest_pred)
@@ -1769,12 +1777,7 @@ bcf_linear_probit <- function(X_train, Z_train, y_train, propensity_train = NULL
           forest_model_config_mu$update_leaf_model_scale(current_leaf_scale_mu)
         }
         
-        if (sample_sigma_leaf_mu) {
-          leaf_scale_mu_double <- sampleLeafVarianceOneIteration(active_forest_mu, rng, a_leaf_mu, b_leaf_mu)
-          current_leaf_scale_mu <- as.matrix(leaf_scale_mu_double)
-          if (keep_sample) leaf_scale_mu_samples[sample_counter] <- leaf_scale_mu_double
-          forest_model_config_mu$update_leaf_model_scale(current_leaf_scale_mu)
-        }
+        # Duplicate leaf scale sampling block removed to fix bias.
         if(simple_prior){
           sigma2_lin <- 1
         } else {
