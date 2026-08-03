@@ -19,8 +19,12 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
                                       rfx_group_ids_train = NULL, rfx_basis_train = NULL, 
                                       num_gfr = 5, num_burnin = 100, num_mcmc = 500, 
                                       use_rao_blackwell = TRUE,
+                                      test_type = c("mean", "distributional"),
+                                      num_grid_points = 50,
                                       general_params = list(), prognostic_forest_params = list(), 
                                       variance_forest_params = list()) {
+  
+  test_type <- match.arg(test_type)
   
   if (!requireNamespace("mvtnorm", quietly = TRUE)) stop("Package 'mvtnorm' is required.")
   if (!requireNamespace("MASS", quietly = TRUE)) stop("Package 'MASS' is required.")
@@ -89,10 +93,18 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
   sigma2_samples <- matrix(0, nrow = num_chains, ncol = num_mcmc)
   
   if (use_rao_blackwell) {
-    s_i_sum <- matrix(0, nrow = num_chains, ncol = n)
+    if (test_type == "mean") {
+      s_i_sum <- matrix(0, nrow = num_chains, ncol = n)
+    } else {
+      U_k_sum <- replicate(num_chains, matrix(0, nrow = p_valid, ncol = num_grid_points), simplify = FALSE)
+      F_k_sum <- matrix(0, nrow = num_chains, ncol = num_grid_points)
+    }
     pval_max_samples <- NULL
     pval_quad_samples <- NULL
   } else {
+    if (test_type == "distributional") {
+      stop("test_type = 'distributional' requires use_rao_blackwell = TRUE")
+    }
     pval_max_samples <- matrix(0, nrow = num_chains, ncol = num_mcmc)
     pval_quad_samples <- matrix(0, nrow = num_chains, ncol = num_mcmc)
   }
@@ -175,6 +187,11 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
   
   num_samples <- num_gfr + num_burnin + num_mcmc
   
+  if (test_type == "distributional") {
+    # Define a static grid based on initial residuals
+    t_grid <- as.numeric(quantile(resid_train_base, probs = seq(0.01, 0.99, length.out = num_grid_points)))
+  }
+  
   # =====================================================================
   # MAIN SAMPLER LOOP
   # =====================================================================
@@ -250,21 +267,35 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
         alpha_samples[chain_num, mcmc_counter] <- alpha
         sigma2_samples[chain_num, mcmc_counter] <- current_sigma2
         
-        # 1. Calculate Score Residuals
-        s_i <- resid_full * Z_cen
-        s_i_cen <- s_i - mean(s_i)
-        
-        if (use_rao_blackwell) {
-          # Accumulate score residuals to compute variance at the posterior mean
-          s_i_sum[chain_num, ] <- s_i_sum[chain_num, ] + as.numeric(s_i_cen)
-        } else {
-          # Legacy method: P-values at every draw using safe evaluation
-          T_vec <- t(X_cen) %*% s_i_cen
-          X_s <- X_cen * as.vector(s_i_cen)
-          Var_T <- crossprod(X_s)
-          draw_pvals <- compute_pmvnorm_safe(T_vec, Var_T, p_valid)
-          pval_quad_samples[chain_num, mcmc_counter] <- draw_pvals$quad
-          pval_max_samples[chain_num, mcmc_counter] <- draw_pvals$max
+        if (test_type == "mean") {
+          # 1. Calculate Score Residuals
+          s_i <- resid_full * Z_cen
+          s_i_cen <- s_i - mean(s_i)
+          
+          if (use_rao_blackwell) {
+            # Accumulate score residuals to compute variance at the posterior mean
+            s_i_sum[chain_num, ] <- s_i_sum[chain_num, ] + as.numeric(s_i_cen)
+          } else {
+            # Legacy method: P-values at every draw using safe evaluation
+            T_vec <- t(X_cen) %*% s_i_cen
+            X_s <- X_cen * as.vector(s_i_cen)
+            Var_T <- crossprod(X_s)
+            draw_pvals <- compute_pmvnorm_safe(T_vec, Var_T, p_valid)
+            pval_quad_samples[chain_num, mcmc_counter] <- draw_pvals$quad
+            pval_max_samples[chain_num, mcmc_counter] <- draw_pvals$max
+          }
+        } else if (test_type == "distributional") {
+          # Calculate Empirical CDF Indicators and Score Matrix
+          I_mat <- outer(as.numeric(resid_full), t_grid, "<=") * 1.0
+          F_k_draw <- colMeans(I_mat)
+          e_mat <- sweep(I_mat, 2, F_k_draw, "-")
+          s_mat <- e_mat * as.numeric(Z_cen)
+          U_k_draw <- crossprod(X_cen, s_mat)
+          
+          if (use_rao_blackwell) {
+            U_k_sum[[chain_num]] <- U_k_sum[[chain_num]] + U_k_draw
+            F_k_sum[chain_num, ] <- F_k_sum[chain_num, ] + F_k_draw
+          }
         }
       }
     }
@@ -274,19 +305,35 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
   # POST-PROCESSING FOR RAO-BLACKWELLIZATION
   # =====================================================================
   if (use_rao_blackwell) {
-    rb_pval_quad <- numeric(num_chains)
-    rb_pval_max <- numeric(num_chains)
-    
-    for (c in 1:num_chains) {
-      s_i_mean <- s_i_sum[c, ] / num_mcmc
+    if (test_type == "mean") {
+      rb_pval_quad <- numeric(num_chains)
+      rb_pval_max <- numeric(num_chains)
       
-      T_vec_mean <- t(X_cen) %*% s_i_mean
-      X_s_mean <- X_cen * as.vector(s_i_mean)
-      Var_T_mean <- crossprod(X_s_mean)
+      for (c in 1:num_chains) {
+        s_i_mean <- s_i_sum[c, ] / num_mcmc
+        
+        T_vec_mean <- t(X_cen) %*% s_i_mean
+        X_s_mean <- X_cen * as.vector(s_i_mean)
+        Var_T_mean <- crossprod(X_s_mean)
+        
+        rb_pvals <- compute_pmvnorm_safe(T_vec_mean, Var_T_mean, p_valid)
+        rb_pval_quad[c] <- rb_pvals$quad
+        rb_pval_max[c] <- rb_pvals$max
+      }
+    } else {
+      rb_pval_wass <- numeric(num_chains)
+      rb_pval_cvm <- numeric(num_chains)
       
-      rb_pvals <- compute_pmvnorm_safe(T_vec_mean, Var_T_mean, p_valid)
-      rb_pval_quad[c] <- rb_pvals$quad
-      rb_pval_max[c] <- rb_pvals$max
+      Z_cen_sq_diag <- as.numeric(Z_cen^2)
+      
+      for (c in 1:num_chains) {
+        U_k_mean <- U_k_sum[[c]] / num_mcmc
+        F_k_mean <- F_k_sum[c, ] / num_mcmc
+        
+        pvals_dist <- compute_distributional_pvalue_safe(U_k_mean, F_k_mean, t_grid, X_cen, Z_cen_sq_diag, p_valid, num_grid_points)
+        rb_pval_wass[c] <- pvals_dist$wass
+        rb_pval_cvm[c] <- pvals_dist$cvm
+      }
     }
   }
   
@@ -301,8 +348,13 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
   )
   
   if (use_rao_blackwell) {
-    result[["rb_pval_quad"]] <- rb_pval_quad
-    result[["rb_pval_max"]] <- rb_pval_max
+    if (test_type == "mean") {
+      result[["rb_pval_quad"]] <- rb_pval_quad
+      result[["rb_pval_max"]] <- rb_pval_max
+    } else {
+      result[["rb_pval_wass"]] <- rb_pval_wass
+      result[["rb_pval_cvm"]] <- rb_pval_cvm
+    }
   } else {
     result[["pval_max_samples"]] <- pval_max_samples
     result[["pval_quad_samples"]] <- pval_quad_samples
@@ -412,4 +464,65 @@ compute_pmvnorm_safe <- function(T_vec, Var_T, p_valid, n_sim = 10000) {
   })
   
   return(list(quad = pval_quad, max = pval_max))
+}
+
+compute_distributional_pvalue_safe <- function(U_k_mean, F_k_mean, t_grid, X_cen, Z_cen_sq_diag, p_valid, K, n_sim = 10000) {
+  X_Z_X <- crossprod(X_cen * sqrt(Z_cen_sq_diag)) 
+  
+  T_k_obs <- numeric(K)
+  V_k_inv_list <- list()
+  for (k in 1:K) {
+    var_F <- F_k_mean[k] * (1 - F_k_mean[k])
+    if (var_F < 1e-6) var_F <- 1e-6
+    V_k <- var_F * X_Z_X
+    V_k_ridge <- V_k + diag(1e-8, p_valid)
+    V_k_inv <- tryCatch(solve(V_k_ridge), error = function(e) MASS::ginv(V_k))
+    V_k_inv_list[[k]] <- V_k_inv
+    T_k_obs[k] <- as.numeric(t(U_k_mean[, k]) %*% V_k_inv %*% U_k_mean[, k])
+  }
+  
+  t_diffs <- diff(t_grid)
+  T_wass_obs <- sum(t_diffs * sqrt(T_k_obs[-K])) 
+  T_cvm_obs <- mean(T_k_obs)
+  
+  Sigma_full <- matrix(0, nrow = p_valid * K, ncol = p_valid * K)
+  for (k in 1:K) {
+    for (l in 1:K) {
+      min_F <- min(F_k_mean[k], F_k_mean[l])
+      cov_F <- min_F - F_k_mean[k] * F_k_mean[l]
+      if (cov_F < 0) cov_F <- 0
+      idx_k <- ((k-1)*p_valid + 1):(k*p_valid)
+      idx_l <- ((l-1)*p_valid + 1):(l*p_valid)
+      Sigma_full[idx_k, idx_l] <- cov_F * X_Z_X
+    }
+  }
+  Sigma_full <- Sigma_full + diag(1e-8, p_valid * K)
+  
+  chol_Sigma <- tryCatch(chol(Sigma_full), error = function(e) NULL)
+  
+  if (is.null(chol_Sigma)) {
+    eig <- eigen(Sigma_full, symmetric = TRUE)
+    pos_eig <- eig$values > 1e-8
+    L <- sweep(eig$vectors[, pos_eig, drop = FALSE], 2, sqrt(eig$values[pos_eig]), "*")
+    Z_standard <- matrix(rnorm(sum(pos_eig) * n_sim), nrow = sum(pos_eig), ncol = n_sim)
+    U_sim <- L %*% Z_standard
+  } else {
+    Z_standard <- matrix(rnorm(p_valid * K * n_sim), nrow = p_valid * K, ncol = n_sim)
+    U_sim <- t(chol_Sigma) %*% Z_standard
+  }
+  
+  T_k_sim_matrix <- matrix(0, nrow = K, ncol = n_sim)
+  for (k in 1:K) {
+    idx_k <- ((k-1)*p_valid + 1):(k*p_valid)
+    U_k_sim <- U_sim[idx_k, , drop = FALSE]
+    T_k_sim_matrix[k, ] <- colSums(U_k_sim * (V_k_inv_list[[k]] %*% U_k_sim))
+  }
+  
+  T_wass_sim <- as.numeric(t_diffs %*% sqrt(T_k_sim_matrix[-K, ]))
+  T_cvm_sim <- colMeans(T_k_sim_matrix)
+  
+  pval_wass <- mean(T_wass_sim >= T_wass_obs)
+  pval_cvm <- mean(T_cvm_sim >= T_cvm_obs)
+  
+  return(list(wass = pval_wass, cvm = pval_cvm))
 }
