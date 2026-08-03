@@ -10,6 +10,8 @@
 #' @param num_burnin Number of "burn-in" iterations. Default: 100.
 #' @param num_mcmc Number of "retained" iterations. Default: 500.
 #' @param use_rao_blackwell Logical. If TRUE, averages the score vector and covariance matrix across MCMC draws to compute a single optimal P-value. Default: TRUE.
+#' @param test_type Character string specifying the score test type: \code{"mean"} for testing the conditional mean, or \code{"distributional"} for testing the full conditional distribution via ECDF. Default: \code{"mean"}.
+#' @param num_grid_points Integer specifying the number of evaluation points for the distributional ECDF test. Ignored if \code{test_type = "mean"}. Default: 50.
 #' @param general_params (Optional) A list of general model parameters.
 #' @param prognostic_forest_params (Optional) A list of prognostic forest model parameters.
 #' @param variance_forest_params (Optional) A list of variance forest model parameters.
@@ -202,6 +204,7 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
     alpha <- 0.0
     current_sigma2 <- current_sigma2_init
     resid_train <- resid_train_base
+    if (test_type == "distributional") grid_initialized <- FALSE
     
     forest_dataset_train <- createForestDataset(X_train_forest, Z_train)
     outcome_train <- createOutcome(resid_train)
@@ -294,6 +297,10 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
           }
           
           # Calculate Empirical CDF Indicators and Score Matrix
+          # I_mat: Indicator matrix for residuals falling below each grid point t
+          # F_k_draw: Marginal ECDF at each grid point
+          # e_mat: Centered indicator (I - F), which has mean 0 under the null
+          # s_mat: Score contribution for treatment heterogeneity: Z_cen * (I - F)
           I_mat <- outer(as.numeric(resid_full), t_grid, "<=") * 1.0
           F_k_draw <- colMeans(I_mat)
           e_mat <- sweep(I_mat, 2, F_k_draw, "-")
@@ -321,6 +328,9 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
         s_i_mean <- s_i_sum[c, ] / num_mcmc
         
         T_vec_mean <- t(X_cen) %*% s_i_mean
+        
+        # Compute the Huber-White empirical sandwich variance estimator of the score.
+        # This provides robustness against heteroskedasticity in the residuals.
         X_s_mean <- X_cen * as.vector(s_i_mean)
         Var_T_mean <- crossprod(X_s_mean)
         
@@ -376,6 +386,16 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
 # HELPER FUNCTIONS
 # =====================================================================
 
+#' Prepare the Design Matrix for the Score Test
+#'
+#' Centers the candidate covariates, generates interactions if requested, and performs a 
+#' QR decomposition to extract a linearly independent, full-rank basis. This makes the 
+#' resulting score test statistic invariant to multicollinearity and dummy variable traps.
+#'
+#' @param X_train_raw Matrix of raw covariates.
+#' @param X_train_metadata_init Metadata identifying continuous vs binary variables.
+#' @param interaction_rule String dictating which interactions to compute ("continuous", "none", etc.).
+#' @return A list containing `X_cen` (the full-rank centered design matrix) and `p_valid` (its rank).
 prepare_score_test_design <- function(X_train_raw, X_train_metadata_init, interaction_rule) {
   n <- nrow(X_train_raw)
   sd_X <- apply(X_train_raw, 2, sd)
@@ -415,7 +435,10 @@ prepare_score_test_design <- function(X_train_raw, X_train_metadata_init, intera
       X_interactions[, idx] <- X_train_raw[, ipairs[1, idx]] * X_train_raw[, ipairs[2, idx]]
     }
     X_interactions <- scale(X_interactions, center = TRUE, scale = TRUE)
-    valid_int <- apply(X_interactions, 2, sd, na.rm = TRUE) > 1e-6
+    valid_int <- apply(X_interactions, 2, function(col) {
+      s <- sd(col, na.rm = TRUE)
+      !is.na(s) && s > 1e-6
+    })
     X_interactions <- X_interactions[, valid_int, drop = FALSE]
   } else {
     X_interactions <- NULL
@@ -434,6 +457,15 @@ prepare_score_test_design <- function(X_train_raw, X_train_metadata_init, intera
   return(list(X_cen = X_cen, p_valid = p_valid))
 }
 
+#' Compute P-Values for the Mean Score Test
+#'
+#' Calculates the chi-squared (quadratic form) and maximum absolute Z-score p-values.
+#' 
+#' @param T_vec The score vector.
+#' @param Var_T The covariance matrix of the score vector.
+#' @param p_valid The degrees of freedom (rank of the design matrix).
+#' @param n_sim Number of simulations used for the max test.
+#' @return A list with `quad` (chi-squared p-value) and `max` (simulated max p-value).
 compute_pmvnorm_safe <- function(T_vec, Var_T, p_valid, n_sim = 10000) {
   # Add a tiny ridge penalty to ensure positive definiteness in edge cases
   Var_T_ridge <- Var_T + diag(1e-8, p_valid)
@@ -468,23 +500,40 @@ compute_pmvnorm_safe <- function(T_vec, Var_T, p_valid, n_sim = 10000) {
     mean(max_Z_sim >= max_Z)
   }, error = function(e) {
     # Fallback to Bonferroni bound if Cholesky fails (e.g., matrix not pos-def)
-    max(0, 1 - (p_valid * 2 * pnorm(-max_Z)))
+    min(1, p_valid * 2 * pnorm(-max_Z))
   })
   
   return(list(quad = pval_quad, max = pval_max))
 }
 
+#' Compute P-Values for the Distributional Score Test
+#'
+#' Computes the Wasserstein (integral of sqrt) and Cramer-von Mises (integral) style 
+#' test statistics for the ECDF-based score test, and simulates p-values from the 
+#' asymptotic Gaussian process (Brownian Bridge) under the null hypothesis.
+#'
+#' @param U_k_mean The posterior mean of the score matrix (p_valid x K).
+#' @param F_k_mean The posterior mean of the ECDF evaluated at the K grid points.
+#' @param t_grid The K evaluation points for the ECDF.
+#' @param X_cen The full-rank centered design matrix.
+#' @param Z_cen_sq_diag A vector containing the squared centered treatment assignments.
+#' @param p_valid The rank of the design matrix.
+#' @param K The number of grid points.
+#' @param n_sim Number of simulations to draw from the null Gaussian process.
+#' @return A list with `wass` (Wasserstein-style p-value) and `cvm` (CvM-style p-value).
 compute_distributional_pvalue_safe <- function(U_k_mean, F_k_mean, t_grid, X_cen, Z_cen_sq_diag, p_valid, K, n_sim = 10000) {
   X_Z_X <- crossprod(X_cen * sqrt(Z_cen_sq_diag)) 
+  # Add a small ridge to X_Z_X once, ensuring the same ridged matrix is used
+  # for both V_k (observed statistic) and Sigma_full (null simulation covariance)
+  X_Z_X_ridge <- X_Z_X + diag(1e-8, p_valid)
   
   T_k_obs <- numeric(K)
   V_k_inv_list <- list()
   for (k in 1:K) {
     var_F <- F_k_mean[k] * (1 - F_k_mean[k])
     if (var_F < 1e-6) var_F <- 1e-6
-    V_k <- var_F * X_Z_X
-    V_k_ridge <- V_k + diag(1e-8, p_valid)
-    V_k_inv <- tryCatch(solve(V_k_ridge), error = function(e) MASS::ginv(V_k))
+    V_k <- var_F * X_Z_X_ridge
+    V_k_inv <- tryCatch(solve(V_k), error = function(e) MASS::ginv(V_k))
     V_k_inv_list[[k]] <- V_k_inv
     T_k_obs[k] <- as.numeric(t(U_k_mean[, k]) %*% V_k_inv %*% U_k_mean[, k])
   }
@@ -493,10 +542,8 @@ compute_distributional_pvalue_safe <- function(U_k_mean, F_k_mean, t_grid, X_cen
   T_wass_obs <- sum(t_diffs * sqrt(T_k_obs[-K])) 
   T_cvm_obs <- mean(T_k_obs)
   
-  # Use the same ridged X_Z_X as V_k to ensure consistency between
-  # the null simulation and the standardization of the test statistic
-  X_Z_X_ridge <- X_Z_X + diag(1e-8 / max(F_k_mean * (1 - F_k_mean)), p_valid)
-  
+  # Construct the Brownian Bridge covariance matrix for the empirical process.
+  # For a given process F, Cov(F(t_k), F(t_l)) = min(F(t_k), F(t_l)) - F(t_k)F(t_l).
   Sigma_full <- matrix(0, nrow = p_valid * K, ncol = p_valid * K)
   for (k in 1:K) {
     for (l in 1:K) {

@@ -15,6 +15,8 @@ bcf_restricted_score_test(
   num_burnin = 100,
   num_mcmc = 500,
   use_rao_blackwell = TRUE,
+  test_type = c("mean", "distributional"),
+  num_grid_points = 50,
   general_params = list(),
   prognostic_forest_params = list(),
   variance_forest_params = list()
@@ -40,6 +42,10 @@ bcf_restricted_score_test(
 \item{num_mcmc}{Number of "retained" iterations. Default: 500.}
 
 \item{use_rao_blackwell}{Logical. If TRUE, averages the score vector and covariance matrix across MCMC draws to compute a single optimal P-value. Default: TRUE.}
+
+\item{test_type}{Character string specifying the score test type: \code{"mean"} for testing the conditional mean, or \code{"distributional"} for testing the full conditional distribution via ECDF. Default: \code{"mean"}.}
+
+\item{num_grid_points}{Integer specifying the number of evaluation points for the distributional ECDF test. Ignored if \code{test_type = "mean"}. Default: 50.}
 
 \item{general_params}{(Optional) A list of general model parameters.}
 
