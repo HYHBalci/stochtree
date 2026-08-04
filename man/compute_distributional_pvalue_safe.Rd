@@ -5,26 +5,20 @@
 \title{Compute P-Values for the Distributional Score Test}
 \usage{
 compute_distributional_pvalue_safe(
-  U_k_mean,
-  F_k_mean,
+  s_mat_mean,
   t_grid,
   X_cen,
-  Z_cen_sq_diag,
   p_valid,
   K,
   n_sim = 10000
 )
 }
 \arguments{
-\item{U_k_mean}{The posterior mean of the score matrix (p_valid x K).}
-
-\item{F_k_mean}{The posterior mean of the ECDF evaluated at the K grid points.}
+\item{s_mat_mean}{The posterior mean of the score matrix (n x K).}
 
 \item{t_grid}{The K evaluation points for the ECDF.}
 
 \item{X_cen}{The full-rank centered design matrix.}
-
-\item{Z_cen_sq_diag}{A vector containing the squared centered treatment assignments.}
 
 \item{p_valid}{The rank of the design matrix.}
 

@@ -98,8 +98,7 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
     if (test_type == "mean") {
       s_i_sum <- matrix(0, nrow = num_chains, ncol = n)
     } else {
-      U_k_sum <- replicate(num_chains, matrix(0, nrow = p_valid, ncol = num_grid_points), simplify = FALSE)
-      F_k_sum <- matrix(0, nrow = num_chains, ncol = num_grid_points)
+      s_mat_sum <- replicate(num_chains, matrix(0, nrow = n, ncol = num_grid_points), simplify = FALSE)
     }
     pval_max_samples <- NULL
     pval_quad_samples <- NULL
@@ -305,11 +304,9 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
           F_k_draw <- colMeans(I_mat)
           e_mat <- sweep(I_mat, 2, F_k_draw, "-")
           s_mat <- e_mat * as.numeric(Z_cen)
-          U_k_draw <- crossprod(X_cen, s_mat)
           
           if (use_rao_blackwell) {
-            U_k_sum[[chain_num]] <- U_k_sum[[chain_num]] + U_k_draw
-            F_k_sum[chain_num, ] <- F_k_sum[chain_num, ] + F_k_draw
+            s_mat_sum[[chain_num]] <- s_mat_sum[[chain_num]] + s_mat
           }
         }
       }
@@ -342,13 +339,10 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
       rb_pval_wass <- numeric(num_chains)
       rb_pval_cvm <- numeric(num_chains)
       
-      Z_cen_sq_diag <- as.numeric(Z_cen^2)
-      
       for (c in 1:num_chains) {
-        U_k_mean <- U_k_sum[[c]] / num_mcmc
-        F_k_mean <- F_k_sum[c, ] / num_mcmc
+        s_mat_mean <- s_mat_sum[[c]] / num_mcmc
         
-        pvals_dist <- compute_distributional_pvalue_safe(U_k_mean, F_k_mean, t_grid, X_cen, Z_cen_sq_diag, p_valid, num_grid_points)
+        pvals_dist <- compute_distributional_pvalue_safe(s_mat_mean, t_grid, X_cen, p_valid, num_grid_points)
         rb_pval_wass[c] <- pvals_dist$wass
         rb_pval_cvm[c] <- pvals_dist$cvm
       }
@@ -512,49 +506,47 @@ compute_pmvnorm_safe <- function(T_vec, Var_T, p_valid, n_sim = 10000) {
 #' test statistics for the ECDF-based score test, and simulates p-values from the 
 #' asymptotic Gaussian process (Brownian Bridge) under the null hypothesis.
 #'
-#' @param U_k_mean The posterior mean of the score matrix (p_valid x K).
-#' @param F_k_mean The posterior mean of the ECDF evaluated at the K grid points.
+#' @param s_mat_mean The posterior mean of the score matrix (n x K).
 #' @param t_grid The K evaluation points for the ECDF.
 #' @param X_cen The full-rank centered design matrix.
-#' @param Z_cen_sq_diag A vector containing the squared centered treatment assignments.
 #' @param p_valid The rank of the design matrix.
 #' @param K The number of grid points.
 #' @param n_sim Number of simulations to draw from the null Gaussian process.
 #' @return A list with `wass` (Wasserstein-style p-value) and `cvm` (CvM-style p-value).
-compute_distributional_pvalue_safe <- function(U_k_mean, F_k_mean, t_grid, X_cen, Z_cen_sq_diag, p_valid, K, n_sim = 10000) {
-  X_Z_X <- crossprod(X_cen * sqrt(Z_cen_sq_diag)) 
-  # Add a small ridge to X_Z_X once, ensuring the same ridged matrix is used
-  # for both V_k (observed statistic) and Sigma_full (null simulation covariance)
-  X_Z_X_ridge <- X_Z_X + diag(1e-8, p_valid)
+compute_distributional_pvalue_safe <- function(s_mat_mean, t_grid, X_cen, p_valid, K, n_sim = 10000) {
+  # Compute the Rao-Blackwellized score vectors
+  U_k_mean <- crossprod(X_cen, s_mat_mean)
+  
+  # Construct the full block-diagonal design matrix scaled by the score process
+  # This enables a highly efficient vectorized computation of the empirical covariance
+  n <- nrow(X_cen)
+  tilde_X <- matrix(0, nrow = n, ncol = p_valid * K)
+  for (k in 1:K) {
+    idx_k <- ((k-1)*p_valid + 1):(k*p_valid)
+    tilde_X[, idx_k] <- X_cen * s_mat_mean[, k]
+  }
+  
+  # Compute the empirical Huber-White sandwich estimator for the entire score process
+  # This inherently captures the variance reduction from Rao-Blackwellization and 
+  # is robust to underlying heteroskedasticity, directly solving the over-conservatism.
+  Sigma_full <- crossprod(tilde_X)
+  
+  # Add a tiny ridge penalty to ensure positive definiteness in edge cases
+  Sigma_full <- Sigma_full + diag(1e-8, p_valid * K)
   
   T_k_obs <- numeric(K)
   V_k_inv_list <- list()
   for (k in 1:K) {
-    var_F <- F_k_mean[k] * (1 - F_k_mean[k])
-    if (var_F < 1e-6) var_F <- 1e-6
-    V_k <- var_F * X_Z_X_ridge
+    idx_k <- ((k-1)*p_valid + 1):(k*p_valid)
+    V_k <- Sigma_full[idx_k, idx_k, drop = FALSE]
     V_k_inv <- tryCatch(solve(V_k), error = function(e) MASS::ginv(V_k))
     V_k_inv_list[[k]] <- V_k_inv
     T_k_obs[k] <- as.numeric(t(U_k_mean[, k]) %*% V_k_inv %*% U_k_mean[, k])
   }
   
   t_diffs <- diff(t_grid)
-  T_wass_obs <- sum(t_diffs * sqrt(T_k_obs[-K])) 
+  T_wass_obs <- sum(t_diffs * sqrt(pmax(T_k_obs[-K], 0))) 
   T_cvm_obs <- mean(T_k_obs)
-  
-  # Construct the Brownian Bridge covariance matrix for the empirical process.
-  # For a given process F, Cov(F(t_k), F(t_l)) = min(F(t_k), F(t_l)) - F(t_k)F(t_l).
-  Sigma_full <- matrix(0, nrow = p_valid * K, ncol = p_valid * K)
-  for (k in 1:K) {
-    for (l in 1:K) {
-      min_F <- min(F_k_mean[k], F_k_mean[l])
-      cov_F <- min_F - F_k_mean[k] * F_k_mean[l]
-      if (cov_F < 0) cov_F <- 0
-      idx_k <- ((k-1)*p_valid + 1):(k*p_valid)
-      idx_l <- ((l-1)*p_valid + 1):(l*p_valid)
-      Sigma_full[idx_k, idx_l] <- cov_F * X_Z_X_ridge
-    }
-  }
   
   chol_Sigma <- tryCatch(chol(Sigma_full), error = function(e) NULL)
   
