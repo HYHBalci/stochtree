@@ -41,6 +41,10 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
   )
   general_params_updated <- preprocessParams(general_params_default, general_params)
   
+  if (general_params_updated$probit_outcome_model) {
+    stop("The score test is currently only mathematically derived and implemented for continuous outcomes. Please ensure probit_outcome_model = FALSE.")
+  }
+  
   rinvgamma <- function(shape, scale) {
     if (shape <= 0.0 || scale <= 0.0) stop("Shape and scale must be positive.");
     return(1.0 / rgamma(1, shape, scale))
@@ -203,7 +207,6 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
     alpha <- 0.0
     current_sigma2 <- current_sigma2_init
     resid_train <- resid_train_base
-    if (test_type == "distributional") grid_initialized <- FALSE
     
     forest_dataset_train <- createForestDataset(X_train_forest, Z_train)
     outcome_train <- createOutcome(resid_train)
@@ -338,6 +341,7 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
     } else {
       rb_pval_wass <- numeric(num_chains)
       rb_pval_cvm <- numeric(num_chains)
+      rb_pval_max_dist <- numeric(num_chains)
       
       for (c in 1:num_chains) {
         s_mat_mean <- s_mat_sum[[c]] / num_mcmc
@@ -345,6 +349,7 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
         pvals_dist <- compute_distributional_pvalue_safe(s_mat_mean, t_grid, X_cen, p_valid, num_grid_points)
         rb_pval_wass[c] <- pvals_dist$wass
         rb_pval_cvm[c] <- pvals_dist$cvm
+        rb_pval_max_dist[c] <- pvals_dist$max
       }
     }
   }
@@ -366,6 +371,7 @@ bcf_restricted_score_test <- function(X_train, Z_train, y_train, propensity_trai
     } else {
       result[["rb_pval_wass"]] <- rb_pval_wass
       result[["rb_pval_cvm"]] <- rb_pval_cvm
+      result[["rb_pval_max"]] <- rb_pval_max_dist
     }
   } else {
     result[["pval_max_samples"]] <- pval_max_samples
@@ -548,6 +554,11 @@ compute_distributional_pvalue_safe <- function(s_mat_mean, t_grid, X_cen, p_vali
   T_wass_obs <- sum(t_diffs * sqrt(pmax(T_k_obs[-K], 0))) 
   T_cvm_obs <- mean(T_k_obs)
   
+  # Max Score Statistic (max Z) calculation
+  U_vec <- as.numeric(U_k_mean)
+  inv_sd_U <- 1 / sqrt(diag(Sigma_full))
+  max_Z_obs <- max(abs(U_vec * inv_sd_U))
+  
   chol_Sigma <- tryCatch(chol(Sigma_full), error = function(e) NULL)
   
   if (is.null(chol_Sigma)) {
@@ -568,11 +579,15 @@ compute_distributional_pvalue_safe <- function(s_mat_mean, t_grid, X_cen, p_vali
     T_k_sim_matrix[k, ] <- colSums(U_k_sim * (V_k_inv_list[[k]] %*% U_k_sim))
   }
   
-  T_wass_sim <- as.numeric(t_diffs %*% sqrt(T_k_sim_matrix[-K, ]))
+  T_wass_sim <- as.numeric(t_diffs %*% sqrt(pmax(T_k_sim_matrix[-K, ], 0)))
   T_cvm_sim <- colMeans(T_k_sim_matrix)
+  
+  Z_sim <- U_sim * inv_sd_U
+  max_Z_sim <- apply(abs(Z_sim), 2, max)
   
   pval_wass <- mean(T_wass_sim >= T_wass_obs)
   pval_cvm <- mean(T_cvm_sim >= T_cvm_obs)
+  pval_max <- mean(max_Z_sim >= max_Z_obs)
   
-  return(list(wass = pval_wass, cvm = pval_cvm))
+  return(list(wass = pval_wass, cvm = pval_cvm, max = pval_max))
 }
